@@ -11,21 +11,65 @@
 #include "PushBoxLevelData.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
+#include "Containers/Queue.h"
 
 APushBoxLevelRuntime::APushBoxLevelRuntime()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	CellSize = 100.0f;
 	VisualBaseCellSize = 100.0f;
 	GridOrigin = FVector::ZeroVector;
+	InputInterval = 0.1f;
+	MoveDuration = 0.1f;
 	CurrentLevelData = nullptr;
 	PlayerCoord = FIntPoint::ZeroValue;
 	bHasAnnouncedVictory = false;
+	NextMoveAllowedTime = 0.0;
+	bIsPlayerInterpolatingMove = false;
+	PlayerMoveStartLocation = FVector::ZeroVector;
+	PlayerMoveTargetLocation = FVector::ZeroVector;
+	PlayerMoveStartTime = 0.0f;
+	PlayerMoveDuration = 0.0f;
+	bHasPlayerLockedZ = false;
+	PlayerLockedZ = 0.0f;
 }
 
 void APushBoxLevelRuntime::BeginPlay()
 {
 	Super::BeginPlay();
+}
+
+void APushBoxLevelRuntime::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (!bIsPlayerInterpolatingMove)
+	{
+		return;
+	}
+
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+	if (!PlayerPawn)
+	{
+		bIsPlayerInterpolatingMove = false;
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World || PlayerMoveDuration <= KINDA_SMALL_NUMBER)
+	{
+		PlayerPawn->SetActorLocation(PlayerMoveTargetLocation);
+		bIsPlayerInterpolatingMove = false;
+		return;
+	}
+
+	const float Elapsed = World->GetTimeSeconds() - PlayerMoveStartTime;
+	const float Alpha = FMath::Clamp(Elapsed / PlayerMoveDuration, 0.0f, 1.0f);
+	PlayerPawn->SetActorLocation(FMath::Lerp(PlayerMoveStartLocation, PlayerMoveTargetLocation, Alpha));
+	if (Alpha >= 1.0f)
+	{
+		bIsPlayerInterpolatingMove = false;
+	}
 }
 
 bool APushBoxLevelRuntime::LoadLevel(UPushBoxLevelData* InLevelData)
@@ -75,22 +119,12 @@ bool APushBoxLevelRuntime::LoadLevel(UPushBoxLevelData* InLevelData)
 		}
 	}
 
-	for (AGridCellBase* SpawnedCell : SpawnedCells)
-	{
-		if (ABoxCell* BoxCell = Cast<ABoxCell>(SpawnedCell))
-		{
-			if (!SpawnBoxFromCell(BoxCell))
-			{
-				UE_LOG(LogPushBox, Error, TEXT("Failed to spawn box actor at (%d, %d)."), BoxCell->GetGridCoord().X, BoxCell->GetGridCoord().Y);
-				ClearSpawnedLevel();
-				CurrentLevelData = nullptr;
-				return false;
-			}
-		}
-	}
-
 	RefreshTargetMatchedEffects();
-	MovePlayerToCoord(PlayerCoord);
+	bIsPlayerInterpolatingMove = false;
+	NextMoveAllowedTime = 0.0;
+	bHasPlayerLockedZ = false;
+	PlayerLockedZ = 0.0f;
+	MovePlayerToCoord(PlayerCoord, true);
 	return true;
 }
 
@@ -99,6 +133,14 @@ bool APushBoxLevelRuntime::TryMove(const FIntPoint& Direction)
 	if (!CurrentLevelData)
 	{
 		return false;
+	}
+
+	if (const UWorld* World = GetWorld())
+	{
+		if (World->GetTimeSeconds() < NextMoveAllowedTime)
+		{
+			return false;
+		}
 	}
 
 	if (Direction == FIntPoint::ZeroValue)
@@ -112,6 +154,18 @@ bool APushBoxLevelRuntime::TryMove(const FIntPoint& Direction)
 		return false;
 	}
 
+	const FCellMoveContext PlayerMoveContext{
+		ECellMoverType::Player,
+		Direction,
+		PlayerCoord,
+		TargetCoord
+	};
+
+	if (!CanMoverExitCell(ECellMoverType::Player, PlayerMoveContext))
+	{
+		return false;
+	}
+
 	if (TObjectPtr<ABoxActor>* BoxAtTarget = BoxByCoord.Find(TargetCoord))
 	{
 		const FIntPoint BoxDestination = TargetCoord + Direction;
@@ -120,20 +174,57 @@ bool APushBoxLevelRuntime::TryMove(const FIntPoint& Direction)
 			return false;
 		}
 
+		const FCellMoveContext BoxMoveContext{
+			ECellMoverType::Box,
+			Direction,
+			TargetCoord,
+			BoxDestination
+		};
+
+		if (!CanMoverExitCell(ECellMoverType::Box, BoxMoveContext))
+		{
+			return false;
+		}
+
+		if (!CanMoverEnterCell(ECellMoverType::Box, BoxMoveContext))
+		{
+			return false;
+		}
+
+		if (!CanMoverEnterCell(ECellMoverType::Player, PlayerMoveContext))
+		{
+			return false;
+		}
+
 		ABoxActor* BoxActor = BoxAtTarget->Get();
 		BoxByCoord.Remove(TargetCoord);
 		BoxByCoord.Add(BoxDestination, BoxActor);
+		BoxCoordByActor.Add(BoxActor, BoxDestination);
 
-		BoxActor->MoveToGridCoord(BoxDestination, GridToWorld(BoxDestination));
+		BoxActor->MoveToGridCoord(BoxDestination, GridToWorld(BoxDestination), MoveDuration);
+
+		NotifyMoverExitCell(ECellMoverType::Box, BoxMoveContext);
+		NotifyMoverEnterCell(ECellMoverType::Box, BoxMoveContext);
 	}
 	else if (BlockingCoords.Contains(TargetCoord))
 	{
 		return false;
 	}
+	else if (!CanMoverEnterCell(ECellMoverType::Player, PlayerMoveContext))
+	{
+		return false;
+	}
 
 	PlayerCoord = TargetCoord;
-	MovePlayerToCoord(PlayerCoord);
+	MovePlayerToCoord(PlayerCoord, false);
+	NotifyMoverExitCell(ECellMoverType::Player, PlayerMoveContext);
+	NotifyMoverEnterCell(ECellMoverType::Player, PlayerMoveContext);
 	RefreshTargetMatchedEffects();
+
+	if (const UWorld* World = GetWorld())
+	{
+		NextMoveAllowedTime = World->GetTimeSeconds() + FMath::Max(InputInterval, 0.0f);
+	}
 
 	if (!bHasAnnouncedVictory && CheckVictory())
 	{
@@ -146,27 +237,32 @@ bool APushBoxLevelRuntime::TryMove(const FIntPoint& Direction)
 
 bool APushBoxLevelRuntime::CheckVictory() const
 {
-	if (BoxByCoord.Num() == 0)
+	if (TargetByCoord.Num() == 0)
 	{
 		return false;
 	}
 
-	for (const TPair<FIntPoint, TObjectPtr<ABoxActor>>& Pair : BoxByCoord)
+	for (const TPair<FIntPoint, TObjectPtr<ABoxTargetCell>>& Pair : TargetByCoord)
 	{
-		const TObjectPtr<ABoxTargetCell>* TargetPtr = TargetByCoord.Find(Pair.Key);
-		if (!TargetPtr)
+		const ABoxTargetCell* TargetCell = Pair.Value.Get();
+		if (!TargetCell)
 		{
 			return false;
 		}
 
-		const ABoxActor* BoxActor = Pair.Value.Get();
-		const ABoxTargetCell* TargetCell = TargetPtr->Get();
-		if (!BoxActor || !TargetCell)
+		const TObjectPtr<ABoxActor>* BoxPtr = BoxByCoord.Find(Pair.Key);
+		if (!BoxPtr)
 		{
 			return false;
 		}
 
-		if (BoxActor->RequiredTargetCellClass && !TargetCell->IsA(BoxActor->RequiredTargetCellClass))
+		const ABoxActor* BoxActor = BoxPtr->Get();
+		if (!BoxActor)
+		{
+			return false;
+		}
+
+		if (!TargetCell->IsBoxAccepted(BoxActor))
 		{
 			return false;
 		}
@@ -183,6 +279,50 @@ bool APushBoxLevelRuntime::ResetToInitialState()
 FName APushBoxLevelRuntime::GetCurrentLevelId() const
 {
 	return CurrentLevelData ? CurrentLevelData->LevelId : NAME_None;
+}
+
+ABoxActor* APushBoxLevelRuntime::RegisterSpawnedBox(const FIntPoint& SpawnCoord, TSubclassOf<ABoxActor> BoxClass, const FIntPoint& TargetCoord)
+{
+	if (!CurrentLevelData)
+	{
+		return nullptr;
+	}
+
+	if (!IsWithinGrid(SpawnCoord))
+	{
+		return nullptr;
+	}
+
+	if (BoxByCoord.Contains(SpawnCoord))
+	{
+		return nullptr;
+	}
+
+	TSubclassOf<ABoxActor> SpawnClass = BoxClass;
+	if (!SpawnClass)
+	{
+		SpawnClass = ABoxActor::StaticClass();
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ABoxActor* BoxActor = GetWorld()->SpawnActor<ABoxActor>(SpawnClass, GridToWorld(SpawnCoord), FRotator::ZeroRotator, SpawnParams);
+	if (!BoxActor)
+	{
+		return nullptr;
+	}
+
+	const float SafeBaseSize = FMath::Max(VisualBaseCellSize, 1.0f);
+	const float UniformScale = CellSize / SafeBaseSize;
+	BoxActor->SetActorScale3D(FVector(UniformScale));
+	BoxActor->SetGridCoord(SpawnCoord);
+	BoxActor->SetTargetCoord(TargetCoord);
+
+	LiveBoxes.Add(BoxActor);
+	BoxByCoord.Add(SpawnCoord, BoxActor);
+	BoxCoordByActor.Add(BoxActor, SpawnCoord);
+	return BoxActor;
 }
 
 bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelData, FLevelValidationResult& OutValidation) const
@@ -205,7 +345,8 @@ bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelDat
 	int32 SpawnCount = 0;
 	int32 BoxCount = 0;
 	int32 TargetCount = 0;
-	TMap<TSubclassOf<ABoxTargetCell>, int32> BoxCountsByTargetClass;
+	TMap<UClass*, int32> AvailableBoxCounts;
+	TArray<TArray<UClass*>> TargetRequirements;
 
 	for (const FPushBoxCellSpawnData& CellDef : InLevelData->CellDefinitions)
 	{
@@ -243,6 +384,26 @@ bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelDat
 			++TargetCount;
 			const TSubclassOf<ABoxTargetCell> TargetClass = CellDef.CellClass.Get();
 			OutValidation.TargetCountsByType.FindOrAdd(TargetClass)++;
+
+			const ABoxTargetCell* TargetCDO = Cast<ABoxTargetCell>(CellDef.CellClass->GetDefaultObject());
+			if (!TargetCDO || TargetCDO->RequiredBoxActorTypes.Num() == 0)
+			{
+				UE_LOG(LogPushBox, Error, TEXT("Target cell class '%s' must define RequiredBoxActorTypes."), *CellDef.CellClass->GetName());
+				return false;
+			}
+
+			TArray<UClass*> RequiredTypes;
+			for (const TSubclassOf<ABoxActor>& RequiredType : TargetCDO->RequiredBoxActorTypes)
+			{
+				UClass* RequiredClass = RequiredType.Get();
+				if (!RequiredClass)
+				{
+					UE_LOG(LogPushBox, Error, TEXT("Target cell class '%s' contains an empty required box type."), *CellDef.CellClass->GetName());
+					return false;
+				}
+				RequiredTypes.Add(RequiredClass);
+			}
+			TargetRequirements.Add(MoveTemp(RequiredTypes));
 			continue;
 		}
 
@@ -257,13 +418,14 @@ bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelDat
 				return false;
 			}
 
-			if (!BoxCDO->TargetCellClass)
+			UClass* SpawnBoxClass = BoxCDO->BoxSpawnClass.Get();
+			if (!SpawnBoxClass)
 			{
-				UE_LOG(LogPushBox, Error, TEXT("Box class '%s' must define TargetCellClass."), *CellDef.CellClass->GetName());
+				UE_LOG(LogPushBox, Error, TEXT("Box cell class '%s' must define BoxSpawnClass."), *CellDef.CellClass->GetName());
 				return false;
 			}
 
-			BoxCountsByTargetClass.FindOrAdd(BoxCDO->TargetCellClass)++;
+			AvailableBoxCounts.FindOrAdd(SpawnBoxClass)++;
 		}
 	}
 
@@ -274,39 +436,164 @@ bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelDat
 		return false;
 	}
 
-	if (BoxCount != TargetCount)
+	if (BoxCount < TargetCount)
 	{
-		UE_LOG(LogPushBox, Error, TEXT("Level '%s' must contain equal box and target counts (boxes=%d, targets=%d)."),
+		UE_LOG(LogPushBox, Error, TEXT("Level '%s' must contain enough boxes for all targets (boxes=%d, targets=%d)."),
 			*InLevelData->GetName(), BoxCount, TargetCount);
 		return false;
 	}
 
-	for (const TPair<TSubclassOf<ABoxTargetCell>, int32>& BoxRequirement : BoxCountsByTargetClass)
+	// Build a small max-flow (target instances -> box classes with supply) to avoid exponential backtracking.
+	TMap<UClass*, int32> ClassToIndex;
+	TArray<UClass*> IndexedClasses;
+	TArray<int32> ClassSupply;
+	for (const TPair<UClass*, int32>& Pair : AvailableBoxCounts)
 	{
-		int32 AvailableTargets = 0;
-		for (const TPair<TSubclassOf<ABoxTargetCell>, int32>& TargetPair : OutValidation.TargetCountsByType)
+		const int32 NewIndex = IndexedClasses.Add(Pair.Key);
+		ClassToIndex.Add(Pair.Key, NewIndex);
+		ClassSupply.Add(Pair.Value);
+	}
+
+	for (const TArray<UClass*>& RequiredTypes : TargetRequirements)
+	{
+		bool bHasAnyAvailableType = false;
+		for (UClass* RequiredType : RequiredTypes)
 		{
-			UClass* RequiredClass = BoxRequirement.Key.Get();
-			UClass* ExistingTargetClass = TargetPair.Key.Get();
-			if (RequiredClass && ExistingTargetClass && ExistingTargetClass->IsChildOf(RequiredClass))
+			if (const int32* ClassIndex = ClassToIndex.Find(RequiredType))
 			{
-				AvailableTargets += TargetPair.Value;
+				if (ClassSupply[*ClassIndex] > 0)
+				{
+					bHasAnyAvailableType = true;
+					break;
+				}
+			}
+		}
+		if (!bHasAnyAvailableType)
+		{
+			UE_LOG(LogPushBox, Error, TEXT("Level '%s' has a target requiring unavailable box classes."), *InLevelData->GetName());
+			return false;
+		}
+	}
+
+	struct FFlowEdge
+	{
+		int32 To = 0;
+		int32 Rev = 0;
+		int32 Cap = 0;
+	};
+
+	auto AddEdge = [](TArray<TArray<FFlowEdge>>& Graph, int32 From, int32 To, int32 Cap)
+	{
+		const int32 FwdIndex = Graph[From].Num();
+		const int32 RevIndex = Graph[To].Num();
+		Graph[From].Add({To, RevIndex, Cap});
+		Graph[To].Add({From, FwdIndex, 0});
+	};
+
+	const int32 TargetNodeOffset = 1;
+	const int32 ClassNodeOffset = TargetNodeOffset + TargetRequirements.Num();
+	const int32 SinkNode = ClassNodeOffset + IndexedClasses.Num();
+	const int32 NodeCount = SinkNode + 1;
+	TArray<TArray<FFlowEdge>> Graph;
+	Graph.SetNum(NodeCount);
+
+	for (int32 TargetIdx = 0; TargetIdx < TargetRequirements.Num(); ++TargetIdx)
+	{
+		const int32 TargetNode = TargetNodeOffset + TargetIdx;
+		AddEdge(Graph, 0, TargetNode, 1);
+
+		for (UClass* RequiredType : TargetRequirements[TargetIdx])
+		{
+			const int32* ClassIndex = ClassToIndex.Find(RequiredType);
+			if (!ClassIndex)
+			{
+				continue;
+			}
+
+			const int32 ClassNode = ClassNodeOffset + *ClassIndex;
+			AddEdge(Graph, TargetNode, ClassNode, 1);
+		}
+	}
+
+	for (int32 ClassIdx = 0; ClassIdx < ClassSupply.Num(); ++ClassIdx)
+	{
+		const int32 ClassNode = ClassNodeOffset + ClassIdx;
+		AddEdge(Graph, ClassNode, SinkNode, ClassSupply[ClassIdx]);
+	}
+
+	auto BuildLevelGraph = [](const TArray<TArray<FFlowEdge>>& GraphRef, int32 Source, TArray<int32>& OutLevel) -> bool
+	{
+		OutLevel.Init(-1, GraphRef.Num());
+		TQueue<int32> Queue;
+		OutLevel[Source] = 0;
+		Queue.Enqueue(Source);
+
+		while (!Queue.IsEmpty())
+		{
+			int32 Node = 0;
+			Queue.Dequeue(Node);
+			for (const FFlowEdge& Edge : GraphRef[Node])
+			{
+				if (Edge.Cap > 0 && OutLevel[Edge.To] < 0)
+				{
+					OutLevel[Edge.To] = OutLevel[Node] + 1;
+					Queue.Enqueue(Edge.To);
+				}
 			}
 		}
 
-		if (AvailableTargets == 0)
+		return OutLevel.Last() >= 0;
+	};
+
+	TFunction<int32(int32, int32, TArray<int32>&, const TArray<int32>&)> SendFlow;
+	SendFlow = [&](int32 Node, int32 Flow, TArray<int32>& It, const TArray<int32>& Level) -> int32
+	{
+		if (Node == SinkNode)
 		{
-			UE_LOG(LogPushBox, Error, TEXT("No target cell found for required target class '%s' in level '%s'."),
-				*GetNameSafe(BoxRequirement.Key.Get()), *InLevelData->GetName());
-			return false;
+			return Flow;
 		}
 
-		if (BoxRequirement.Value > AvailableTargets)
+		for (; It[Node] < Graph[Node].Num(); ++It[Node])
 		{
-			UE_LOG(LogPushBox, Error, TEXT("Not enough target cells for class '%s' in level '%s' (boxes=%d, targets=%d)."),
-				*GetNameSafe(BoxRequirement.Key.Get()), *InLevelData->GetName(), BoxRequirement.Value, AvailableTargets);
-			return false;
+			FFlowEdge& Edge = Graph[Node][It[Node]];
+			if (Edge.Cap <= 0 || Level[Edge.To] != Level[Node] + 1)
+			{
+				continue;
+			}
+
+			const int32 Pushed = SendFlow(Edge.To, FMath::Min(Flow, Edge.Cap), It, Level);
+			if (Pushed > 0)
+			{
+				Edge.Cap -= Pushed;
+				Graph[Edge.To][Edge.Rev].Cap += Pushed;
+				return Pushed;
+			}
 		}
+
+		return 0;
+	};
+
+	int32 MaxFlow = 0;
+	TArray<int32> Level;
+	while (BuildLevelGraph(Graph, 0, Level))
+	{
+		TArray<int32> It;
+		It.Init(0, Graph.Num());
+		while (true)
+		{
+			const int32 Pushed = SendFlow(0, TNumericLimits<int32>::Max(), It, Level);
+			if (Pushed <= 0)
+			{
+				break;
+			}
+			MaxFlow += Pushed;
+		}
+	}
+
+	if (MaxFlow < TargetRequirements.Num())
+	{
+		UE_LOG(LogPushBox, Error, TEXT("Level '%s' does not have enough strict-matching box classes to satisfy all targets."), *InLevelData->GetName());
+		return false;
 	}
 
 	OutValidation.bIsValid = true;
@@ -323,7 +610,7 @@ void APushBoxLevelRuntime::ClearSpawnedLevel()
 		}
 	}
 
-	for (ABoxActor* SpawnedBox : SpawnedBoxes)
+	for (ABoxActor* SpawnedBox : LiveBoxes)
 	{
 		if (IsValid(SpawnedBox))
 		{
@@ -332,8 +619,9 @@ void APushBoxLevelRuntime::ClearSpawnedLevel()
 	}
 
 	SpawnedCells.Reset();
-	SpawnedBoxes.Reset();
+	LiveBoxes.Reset();
 	BoxByCoord.Reset();
+	BoxCoordByActor.Reset();
 	TargetByCoord.Reset();
 	BlockingCoords.Reset();
 }
@@ -346,10 +634,14 @@ AGridCellBase* APushBoxLevelRuntime::SpawnCell(const TSubclassOf<AGridCellBase>&
 	}
 
 	const FVector SpawnLocation = GridToWorld(GridCoord);
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	AGridCellBase* SpawnedCell = GetWorld()->SpawnActor<AGridCellBase>(CellClass, SpawnLocation, FRotator::ZeroRotator, SpawnParams);
+	const FTransform SpawnTransform(FRotator::ZeroRotator, SpawnLocation);
+	AGridCellBase* SpawnedCell = GetWorld()->SpawnActorDeferred<AGridCellBase>(
+		CellClass,
+		SpawnTransform,
+		this,
+		nullptr,
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn
+	);
 	if (!SpawnedCell)
 	{
 		return nullptr;
@@ -358,8 +650,8 @@ AGridCellBase* APushBoxLevelRuntime::SpawnCell(const TSubclassOf<AGridCellBase>&
 	const float SafeBaseSize = FMath::Max(VisualBaseCellSize, 1.0f);
 	const float UniformScale = CellSize / SafeBaseSize;
 	SpawnedCell->SetActorScale3D(FVector(UniformScale));
-
 	SpawnedCell->SetGridCoord(GridCoord);
+	UGameplayStatics::FinishSpawningActor(SpawnedCell, SpawnTransform);
 	RegisterSpawnedCell(SpawnedCell);
 	return SpawnedCell;
 }
@@ -374,7 +666,7 @@ void APushBoxLevelRuntime::RegisterSpawnedCell(AGridCellBase* SpawnedCell)
 	const FIntPoint Coord = SpawnedCell->GetGridCoord();
 	SpawnedCells.Add(SpawnedCell);
 
-	if (ABoxCell* BoxCell = Cast<ABoxCell>(SpawnedCell))
+	if (SpawnedCell->IsA(ABoxCell::StaticClass()))
 	{
 		return;
 	}
@@ -386,11 +678,6 @@ void APushBoxLevelRuntime::RegisterSpawnedCell(AGridCellBase* SpawnedCell)
 
 	if (SpawnedCell->IsBlockingMovement())
 	{
-		if (Cast<ABoxCell>(SpawnedCell))
-		{
-			return;
-		}
-
 		BlockingCoords.Add(Coord);
 	}
 }
@@ -416,44 +703,6 @@ void APushBoxLevelRuntime::UnregisterSpawnedCell(AGridCellBase* SpawnedCell)
 	}
 }
 
-ABoxActor* APushBoxLevelRuntime::SpawnBoxFromCell(ABoxCell* BoxCell)
-{
-	if (!BoxCell)
-	{
-		return nullptr;
-	}
-
-	TSubclassOf<ABoxActor> BoxClass = BoxCell->BoxActorClass;
-	if (!BoxClass)
-	{
-		BoxClass = ABoxActor::StaticClass();
-	}
-
-	const FIntPoint BoxCoord = BoxCell->GetGridCoord();
-	const FVector SpawnLocation = GridToWorld(BoxCoord);
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	ABoxActor* BoxActor = GetWorld()->SpawnActor<ABoxActor>(BoxClass, SpawnLocation, FRotator::ZeroRotator, SpawnParams);
-	if (!BoxActor)
-	{
-		return nullptr;
-	}
-
-	const float SafeBaseSize = FMath::Max(VisualBaseCellSize, 1.0f);
-	const float UniformScale = CellSize / SafeBaseSize;
-	BoxActor->SetActorScale3D(FVector(UniformScale));
-	BoxActor->SetGridCoord(BoxCoord);
-	BoxActor->RequiredTargetCellClass = BoxCell->TargetCellClass;
-	BoxActor->SetBoxMesh(BoxCell->GetBoxPreviewMesh());
-	BoxActor->BoxMeshComponent->SetRelativeTransform(BoxCell->GetBoxPreviewMeshRelativeTransform());
-
-	SpawnedBoxes.Add(BoxActor);
-	BoxByCoord.Add(BoxCoord, BoxActor);
-	return BoxActor;
-}
-
 void APushBoxLevelRuntime::RefreshTargetMatchedEffects()
 {
 	for (const TPair<FIntPoint, TObjectPtr<ABoxTargetCell>>& Pair : TargetByCoord)
@@ -468,7 +717,7 @@ void APushBoxLevelRuntime::RefreshTargetMatchedEffects()
 		if (const TObjectPtr<ABoxActor>* BoxAtTarget = BoxByCoord.Find(Pair.Key))
 		{
 			const ABoxActor* BoxActor = BoxAtTarget->Get();
-			bMatched = BoxActor && BoxActor->RequiredTargetCellClass && TargetCell->IsA(BoxActor->RequiredTargetCellClass);
+			bMatched = BoxActor && TargetCell->IsBoxAccepted(BoxActor);
 		}
 
 		TargetCell->SetMatchedState(bMatched);
@@ -486,6 +735,101 @@ AGridCellBase* APushBoxLevelRuntime::FindSpawnedCellAt(const FIntPoint& GridCoor
 	}
 
 	return nullptr;
+}
+
+TArray<AGridCellBase*> APushBoxLevelRuntime::FindAllCellsAt(const FIntPoint& GridCoord) const
+{
+	TArray<AGridCellBase*> Cells;
+	for (AGridCellBase* SpawnedCell : SpawnedCells)
+	{
+		if (SpawnedCell && SpawnedCell->GetGridCoord() == GridCoord)
+		{
+			Cells.Add(SpawnedCell);
+		}
+	}
+	return Cells;
+}
+
+bool APushBoxLevelRuntime::CanMoverExitCell(ECellMoverType MoverType, const FCellMoveContext& Context) const
+{
+	for (AGridCellBase* Cell : FindAllCellsAt(Context.FromCoord))
+	{
+		if (!Cell)
+		{
+			continue;
+		}
+
+		const bool bAllowed = (MoverType == ECellMoverType::Player)
+			? Cell->CanPlayerExit(Context)
+			: Cell->CanBoxExit(Context);
+		if (!bAllowed)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool APushBoxLevelRuntime::CanMoverEnterCell(ECellMoverType MoverType, const FCellMoveContext& Context) const
+{
+	for (AGridCellBase* Cell : FindAllCellsAt(Context.ToCoord))
+	{
+		if (!Cell)
+		{
+			continue;
+		}
+
+		const bool bAllowed = (MoverType == ECellMoverType::Player)
+			? Cell->CanPlayerEnter(Context)
+			: Cell->CanBoxEnter(Context);
+		if (!bAllowed)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+void APushBoxLevelRuntime::NotifyMoverExitCell(ECellMoverType MoverType, const FCellMoveContext& Context)
+{
+	for (AGridCellBase* Cell : FindAllCellsAt(Context.FromCoord))
+	{
+		if (!Cell)
+		{
+			continue;
+		}
+
+		if (MoverType == ECellMoverType::Player)
+		{
+			Cell->OnPlayerExit(Context);
+		}
+		else
+		{
+			Cell->OnBoxExit(Context);
+		}
+	}
+}
+
+void APushBoxLevelRuntime::NotifyMoverEnterCell(ECellMoverType MoverType, const FCellMoveContext& Context)
+{
+	for (AGridCellBase* Cell : FindAllCellsAt(Context.ToCoord))
+	{
+		if (!Cell)
+		{
+			continue;
+		}
+
+		if (MoverType == ECellMoverType::Player)
+		{
+			Cell->OnPlayerEnter(Context);
+		}
+		else
+		{
+			Cell->OnBoxEnter(Context);
+		}
+	}
 }
 
 bool APushBoxLevelRuntime::IsWithinGrid(const FIntPoint& GridCoord) const
@@ -506,7 +850,7 @@ FVector APushBoxLevelRuntime::GridToWorld(const FIntPoint& GridCoord) const
 	return GridOrigin + FVector(GridCoord.X * CellSize, GridCoord.Y * CellSize, 0.0f);
 }
 
-void APushBoxLevelRuntime::MovePlayerToCoord(const FIntPoint& GridCoord) const
+void APushBoxLevelRuntime::MovePlayerToCoord(const FIntPoint& GridCoord, bool bInstant)
 {
 	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
 	if (!PlayerPawn)
@@ -514,5 +858,24 @@ void APushBoxLevelRuntime::MovePlayerToCoord(const FIntPoint& GridCoord) const
 		return;
 	}
 
-	PlayerPawn->SetActorLocation(GridToWorld(GridCoord));
+	if (!bHasPlayerLockedZ)
+	{
+		PlayerLockedZ = PlayerPawn->GetActorLocation().Z;
+		bHasPlayerLockedZ = true;
+	}
+
+	const FVector TargetLocation = GridToWorld(GridCoord);
+	const FVector LockedTargetLocation(TargetLocation.X, TargetLocation.Y, PlayerLockedZ);
+	if (bInstant || MoveDuration <= KINDA_SMALL_NUMBER || !GetWorld())
+	{
+		PlayerPawn->SetActorLocation(LockedTargetLocation);
+		bIsPlayerInterpolatingMove = false;
+		return;
+	}
+
+	PlayerMoveStartLocation = PlayerPawn->GetActorLocation();
+	PlayerMoveTargetLocation = LockedTargetLocation;
+	PlayerMoveStartTime = GetWorld()->GetTimeSeconds();
+	PlayerMoveDuration = MoveDuration;
+	bIsPlayerInterpolatingMove = true;
 }

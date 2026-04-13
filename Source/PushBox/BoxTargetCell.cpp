@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "BoxTargetCell.h"
+#include "BoxActor.h"
 #include "NiagaraComponent.h"
 
 ABoxTargetCell::ABoxTargetCell()
@@ -44,4 +45,23 @@ void ABoxTargetCell::SetMatchedState(bool bIsMatched)
 			MatchedNiagaraComponent->Deactivate();
 		}
 	}
+}
+
+bool ABoxTargetCell::IsBoxAccepted(const ABoxActor* BoxActor) const
+{
+	if (!BoxActor || RequiredBoxActorTypes.Num() == 0)
+	{
+		return false;
+	}
+
+	UClass* BoxClass = BoxActor->GetClass();
+	for (const TSubclassOf<ABoxActor>& RequiredType : RequiredBoxActorTypes)
+	{
+		if (RequiredType.Get() == BoxClass)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }

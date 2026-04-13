@@ -5,7 +5,7 @@
 
 ABoxActor::ABoxActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(SceneRoot);
@@ -17,6 +17,38 @@ ABoxActor::ABoxActor()
 	BoxMeshComponent->SetReceivesDecals(false);
 
 	GridCoord = FIntPoint::ZeroValue;
+	TargetCoord = FIntPoint::ZeroValue;
+	bIsInterpolatingMove = false;
+	MoveStartLocation = FVector::ZeroVector;
+	MoveTargetLocation = FVector::ZeroVector;
+	MoveStartTime = 0.0f;
+	MoveDuration = 0.0f;
+}
+
+void ABoxActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (!bIsInterpolatingMove)
+	{
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	if (!World || MoveDuration <= KINDA_SMALL_NUMBER)
+	{
+		SetActorLocation(MoveTargetLocation);
+		bIsInterpolatingMove = false;
+		return;
+	}
+
+	const float Elapsed = World->GetTimeSeconds() - MoveStartTime;
+	const float Alpha = FMath::Clamp(Elapsed / MoveDuration, 0.0f, 1.0f);
+	SetActorLocation(FMath::Lerp(MoveStartLocation, MoveTargetLocation, Alpha));
+	if (Alpha >= 1.0f)
+	{
+		bIsInterpolatingMove = false;
+	}
 }
 
 void ABoxActor::SetGridCoord(const FIntPoint& InGridCoord)
@@ -24,13 +56,29 @@ void ABoxActor::SetGridCoord(const FIntPoint& InGridCoord)
 	GridCoord = InGridCoord;
 }
 
-void ABoxActor::MoveToGridCoord(const FIntPoint& InGridCoord, const FVector& WorldLocation)
+void ABoxActor::MoveToGridCoord(const FIntPoint& InGridCoord, const FVector& WorldLocation, float InMoveDuration)
 {
 	GridCoord = InGridCoord;
-	SetActorLocation(WorldLocation);
+	if (InMoveDuration <= KINDA_SMALL_NUMBER || !GetWorld())
+	{
+		SetActorLocation(WorldLocation);
+		bIsInterpolatingMove = false;
+		return;
+	}
+
+	MoveStartLocation = GetActorLocation();
+	MoveTargetLocation = WorldLocation;
+	MoveStartTime = GetWorld()->GetTimeSeconds();
+	MoveDuration = InMoveDuration;
+	bIsInterpolatingMove = true;
 }
 
 void ABoxActor::SetBoxMesh(UStaticMesh* InMesh)
 {
 	BoxMeshComponent->SetStaticMesh(InMesh);
+}
+
+void ABoxActor::SetTargetCoord(const FIntPoint& InTargetCoord)
+{
+	TargetCoord = InTargetCoord;
 }

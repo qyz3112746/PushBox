@@ -6,11 +6,6 @@
 #include "GridCellBase.h"
 #include "BoxCell.generated.h"
 
-class ABoxActor;
-class ABoxTargetCell;
-class UStaticMesh;
-class UStaticMeshComponent;
-
 UCLASS(Blueprintable)
 class ABoxCell : public AGridCellBase
 {
@@ -19,19 +14,12 @@ class ABoxCell : public AGridCellBase
 public:
 	ABoxCell();
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "6"))
-	TSubclassOf<ABoxTargetCell> TargetCellClass;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cell|Box", meta = (DisplayPriority = "6"))
+	TSubclassOf<ABoxActor> BoxSpawnClass;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "7"))
-	TSubclassOf<ABoxActor> BoxActorClass;
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Cell|Box", meta = (DisplayPriority = "7"))
+	TObjectPtr<ABoxActor> SpawnedBox;
 
-	// Editor-visible preview mesh for configuring spawned box visuals.
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "8"))
-	TObjectPtr<UStaticMeshComponent> BoxPreviewMeshComponent;
-
-	UFUNCTION(BlueprintPure, Category = "Cell")
-	UStaticMesh* GetBoxPreviewMesh() const;
-
-	UFUNCTION(BlueprintPure, Category = "Cell")
-	FTransform GetBoxPreviewMeshRelativeTransform() const;
+protected:
+	virtual void BeginPlay() override;
 };

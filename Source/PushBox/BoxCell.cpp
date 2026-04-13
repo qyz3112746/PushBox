@@ -2,19 +2,12 @@
 
 #include "BoxCell.h"
 #include "BoxActor.h"
-#include "Components/StaticMeshComponent.h"
 
 ABoxCell::ABoxCell()
 {
 	bBlocksMovement = false;
-	BoxActorClass = ABoxActor::StaticClass();
-
-	BoxPreviewMeshComponent = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BoxPreviewMesh"));
-	BoxPreviewMeshComponent->SetupAttachment(SceneRoot);
-	BoxPreviewMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	BoxPreviewMeshComponent->SetVisibility(true);
-	BoxPreviewMeshComponent->SetHiddenInGame(true);
-	BoxPreviewMeshComponent->SetReceivesDecals(false);
+	BoxSpawnClass = ABoxActor::StaticClass();
+	SpawnedBox = nullptr;
 
 	if (CellMeshComponent)
 	{
@@ -22,12 +15,8 @@ ABoxCell::ABoxCell()
 	}
 }
 
-UStaticMesh* ABoxCell::GetBoxPreviewMesh() const
+void ABoxCell::BeginPlay()
 {
-	return BoxPreviewMeshComponent ? BoxPreviewMeshComponent->GetStaticMesh() : nullptr;
-}
-
-FTransform ABoxCell::GetBoxPreviewMeshRelativeTransform() const
-{
-	return BoxPreviewMeshComponent ? BoxPreviewMeshComponent->GetRelativeTransform() : FTransform::Identity;
+	Super::BeginPlay();
+	SpawnedBox = SpawnBoxAt(BoxSpawnClass, GetGridCoord());
 }

@@ -6,6 +6,7 @@
 #include "GridCellBase.h"
 #include "BoxTargetCell.generated.h"
 
+class ABoxActor;
 class UNiagaraComponent;
 
 UCLASS(Blueprintable)
@@ -18,6 +19,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "PushBox|Target")
 	void SetMatchedState(bool bIsMatched);
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Target")
+	bool IsBoxAccepted(const ABoxActor* BoxActor) const;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "PushBox|Target")
+	TArray<TSubclassOf<ABoxActor>> RequiredBoxActorTypes;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cell")
 	UNiagaraComponent* MatchedNiagaraComponent;
