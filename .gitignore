@@ -1,0 +1,32 @@
+﻿# Unreal Engine generated folders
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Visual Studio
+.vs/
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build artifacts
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# Logs and temp
+*.log
+*.tmp
+
+# Optional local config
+*.opensdf
+*.sdf
+
+# Keep source content under version control
+# (Config/, Content/, Source/, Plugins/, *.uproject, etc.)
