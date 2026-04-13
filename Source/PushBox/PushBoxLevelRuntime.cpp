@@ -89,6 +89,7 @@ bool APushBoxLevelRuntime::LoadLevel(UPushBoxLevelData* InLevelData)
 		}
 	}
 
+	RefreshTargetMatchedEffects();
 	MovePlayerToCoord(PlayerCoord);
 	return true;
 }
@@ -132,6 +133,7 @@ bool APushBoxLevelRuntime::TryMove(const FIntPoint& Direction)
 
 	PlayerCoord = TargetCoord;
 	MovePlayerToCoord(PlayerCoord);
+	RefreshTargetMatchedEffects();
 
 	if (!bHasAnnouncedVictory && CheckVictory())
 	{
@@ -450,6 +452,27 @@ ABoxActor* APushBoxLevelRuntime::SpawnBoxFromCell(ABoxCell* BoxCell)
 	SpawnedBoxes.Add(BoxActor);
 	BoxByCoord.Add(BoxCoord, BoxActor);
 	return BoxActor;
+}
+
+void APushBoxLevelRuntime::RefreshTargetMatchedEffects()
+{
+	for (const TPair<FIntPoint, TObjectPtr<ABoxTargetCell>>& Pair : TargetByCoord)
+	{
+		ABoxTargetCell* TargetCell = Pair.Value.Get();
+		if (!TargetCell)
+		{
+			continue;
+		}
+
+		bool bMatched = false;
+		if (const TObjectPtr<ABoxActor>* BoxAtTarget = BoxByCoord.Find(Pair.Key))
+		{
+			const ABoxActor* BoxActor = BoxAtTarget->Get();
+			bMatched = BoxActor && BoxActor->RequiredTargetCellClass && TargetCell->IsA(BoxActor->RequiredTargetCellClass);
+		}
+
+		TargetCell->SetMatchedState(bMatched);
+	}
 }
 
 AGridCellBase* APushBoxLevelRuntime::FindSpawnedCellAt(const FIntPoint& GridCoord) const

@@ -14,6 +14,7 @@ ABoxActor::ABoxActor()
 	BoxMeshComponent->SetupAttachment(SceneRoot);
 	BoxMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BoxMeshComponent->SetVisibility(true);
+	BoxMeshComponent->SetReceivesDecals(false);
 
 	GridCoord = FIntPoint::ZeroValue;
 }

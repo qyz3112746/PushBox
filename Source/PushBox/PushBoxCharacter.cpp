@@ -16,6 +16,11 @@ APushBoxCharacter::APushBoxCharacter()
 	// Set size for player capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
+	if (GetMesh())
+	{
+		GetMesh()->SetReceivesDecals(false);
+	}
+
 	// Don't rotate character to camera direction
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;

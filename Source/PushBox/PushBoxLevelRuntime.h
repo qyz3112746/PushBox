@@ -81,6 +81,7 @@ private:
 	void RegisterSpawnedCell(AGridCellBase* SpawnedCell);
 	void UnregisterSpawnedCell(AGridCellBase* SpawnedCell);
 	ABoxActor* SpawnBoxFromCell(ABoxCell* BoxCell);
+	void RefreshTargetMatchedEffects();
 	AGridCellBase* FindSpawnedCellAt(const FIntPoint& GridCoord) const;
 	bool IsWithinGrid(const FIntPoint& GridCoord) const;
 	FVector GridToWorld(const FIntPoint& GridCoord) const;

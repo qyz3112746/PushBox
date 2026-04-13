@@ -14,6 +14,12 @@ ABoxCell::ABoxCell()
 	BoxPreviewMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	BoxPreviewMeshComponent->SetVisibility(true);
 	BoxPreviewMeshComponent->SetHiddenInGame(true);
+	BoxPreviewMeshComponent->SetReceivesDecals(false);
+
+	if (CellMeshComponent)
+	{
+		CellMeshComponent->SetReceivesDecals(false);
+	}
 }
 
 UStaticMesh* ABoxCell::GetBoxPreviewMesh() const
