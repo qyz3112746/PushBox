@@ -9,6 +9,7 @@
 class ABoxActor;
 class ABoxTargetCell;
 class UStaticMesh;
+class UStaticMeshComponent;
 
 UCLASS(Blueprintable)
 class ABoxCell : public AGridCellBase
@@ -24,7 +25,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "7"))
 	TSubclassOf<ABoxActor> BoxActorClass;
 
-	// Mesh used by the spawned BoxActor (independent from cell's own mesh component).
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "8"))
-	TObjectPtr<UStaticMesh> BoxActorMesh;
+	// Editor-visible preview mesh for configuring spawned box visuals.
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Cell", meta = (DisplayPriority = "8"))
+	TObjectPtr<UStaticMeshComponent> BoxPreviewMeshComponent;
+
+	UFUNCTION(BlueprintPure, Category = "Cell")
+	UStaticMesh* GetBoxPreviewMesh() const;
+
+	UFUNCTION(BlueprintPure, Category = "Cell")
+	FTransform GetBoxPreviewMeshRelativeTransform() const;
 };

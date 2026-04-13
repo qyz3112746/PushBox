@@ -444,8 +444,8 @@ ABoxActor* APushBoxLevelRuntime::SpawnBoxFromCell(ABoxCell* BoxCell)
 	BoxActor->SetActorScale3D(FVector(UniformScale));
 	BoxActor->SetGridCoord(BoxCoord);
 	BoxActor->RequiredTargetCellClass = BoxCell->TargetCellClass;
-	BoxActor->SetBoxMesh(BoxCell->BoxActorMesh);
-	BoxActor->BoxMeshComponent->SetRelativeTransform(BoxCell->GetCellMeshRelativeTransform());
+	BoxActor->SetBoxMesh(BoxCell->GetBoxPreviewMesh());
+	BoxActor->BoxMeshComponent->SetRelativeTransform(BoxCell->GetBoxPreviewMeshRelativeTransform());
 
 	SpawnedBoxes.Add(BoxActor);
 	BoxByCoord.Add(BoxCoord, BoxActor);
