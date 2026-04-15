@@ -26,6 +26,12 @@ void ULevelGridCellWidget::SetDisplayStyle(const FLinearColor& InColor, UTexture
 	RefreshVisuals();
 }
 
+void ULevelGridCellWidget::SetSelectedState(bool bInSelected)
+{
+	bIsSelected = bInSelected;
+	RefreshVisuals();
+}
+
 void ULevelGridCellWidget::SetCellVisualSize(float InSize)
 {
 	if (!CellSizeBox)
@@ -49,6 +55,27 @@ FReply ULevelGridCellWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry
 	return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
 }
 
+FReply ULevelGridCellWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		OnCellMouseReleased.Broadcast();
+		return FReply::Handled();
+	}
+
+	return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
+}
+
+void ULevelGridCellWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
+
+	if (bIsValidCoord && InMouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton))
+	{
+		OnCellHoveredWhilePressed.Broadcast(Coord);
+	}
+}
+
 void ULevelGridCellWidget::NativePreConstruct()
 {
 	Super::NativePreConstruct();
@@ -59,8 +86,18 @@ void ULevelGridCellWidget::RefreshVisuals()
 {
 	if (CellBorder)
 	{
-		const FLinearColor EffectiveColor = bIsValidCoord ? DisplayColor : InvalidCellColor;
+		FLinearColor EffectiveColor = bIsValidCoord ? DisplayColor : InvalidCellColor;
+		if (bIsValidCoord && bIsSelected)
+		{
+			EffectiveColor = FLinearColor::LerpUsingHSV(EffectiveColor, SelectionOutlineColor, 0.35f);
+		}
 		CellBorder->SetBrushColor(EffectiveColor);
+	}
+
+	if (SelectionBorder)
+	{
+		SelectionBorder->SetBrushColor(SelectionOutlineColor);
+		SelectionBorder->SetVisibility((bIsValidCoord && bIsSelected) ? ESlateVisibility::SelfHitTestInvisible : ESlateVisibility::Collapsed);
 	}
 
 	if (CellIconImage)

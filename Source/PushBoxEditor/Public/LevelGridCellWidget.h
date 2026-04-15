@@ -14,6 +14,8 @@ class UTexture2D;
 class AGridCellBase;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLevelGridCellClicked, FIntPoint, Coord);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLevelGridCellHoveredWhilePressed, FIntPoint, Coord);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnLevelGridCellMouseReleased);
 
 UCLASS(BlueprintType)
 class PUSHBOXEDITOR_API ULevelGridCellWidget : public UUserWidget
@@ -24,11 +26,20 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Grid")
 	FOnLevelGridCellClicked OnCellClicked;
 
+	UPROPERTY(BlueprintAssignable, Category = "Grid")
+	FOnLevelGridCellHoveredWhilePressed OnCellHoveredWhilePressed;
+
+	UPROPERTY(BlueprintAssignable, Category = "Grid")
+	FOnLevelGridCellMouseReleased OnCellMouseReleased;
+
 	UFUNCTION(BlueprintCallable, Category = "Grid")
 	void SetCellData(const FIntPoint& InCoord, TSubclassOf<AGridCellBase> InCellClass, bool bInIsValidCoord);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid")
 	void SetDisplayStyle(const FLinearColor& InColor, UTexture2D* InIcon);
+
+	UFUNCTION(BlueprintCallable, Category = "Grid")
+	void SetSelectedState(bool bInSelected);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid")
 	void SetCellVisualSize(float InSize);
@@ -44,6 +55,8 @@ public:
 
 protected:
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+	virtual void NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual void NativePreConstruct() override;
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Grid")
@@ -64,6 +77,9 @@ protected:
 	UPROPERTY(meta = (BindWidgetOptional), BlueprintReadOnly, Category = "Grid")
 	TObjectPtr<UImage> CellIconImage;
 
+	UPROPERTY(meta = (BindWidgetOptional), BlueprintReadOnly, Category = "Grid")
+	TObjectPtr<UBorder> SelectionBorder;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid|Style")
 	FLinearColor ValidCellColor = FLinearColor(0.75f, 0.75f, 0.75f, 1.0f);
 
@@ -72,6 +88,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid|Style")
 	bool bShowClassNameInLabel = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid|Style")
+	FLinearColor SelectionOutlineColor = FLinearColor(1.0f, 0.85f, 0.2f, 1.0f);
 
 	UPROPERTY(BlueprintReadOnly, Category = "Grid")
 	FIntPoint Coord = FIntPoint::ZeroValue;
@@ -87,4 +106,7 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Grid")
 	TObjectPtr<UTexture2D> DisplayIcon = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Grid")
+	bool bIsSelected = false;
 };

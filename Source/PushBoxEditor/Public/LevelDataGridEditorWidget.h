@@ -13,6 +13,14 @@ class UUniformGridPanel;
 class ULevelGridCellWidget;
 class AGridCellBase;
 
+UENUM()
+enum class EGridSelectionOp : uint8
+{
+	Replace,
+	Add,
+	Remove
+};
+
 UCLASS(BlueprintType)
 class PUSHBOXEDITOR_API ULevelDataGridEditorWidget : public UUserWidget
 {
@@ -20,16 +28,22 @@ class PUSHBOXEDITOR_API ULevelDataGridEditorWidget : public UUserWidget
 
 public:
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
-	bool LoadFromLevelData(UPushBoxLevelData* InData);
-
-	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool WriteBackToLevelData();
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
+	bool RefreshLevelDisplayWithCellDisplay(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	void SetMapSize(int32 InWidth, int32 InHeight);
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Edit")
+	bool ApplyCellDisplayToSelection(const FCellDisplay& InDisplay);
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Edit")
+	void ClearSelection();
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Edit")
 	void SetActiveBrushCellClass(TSubclassOf<AGridCellBase> InClass);
@@ -40,8 +54,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "LevelEditor|Data")
 	UPushBoxLevelData* GetEditingLevelData() const { return EditingLevelData; }
 
+	UFUNCTION(BlueprintPure, Category = "LevelEditor|Data")
+	UPushBoxLevelData* GetTemporaryLevelData() const { return TemporaryLevelData; }
+
 protected:
+	virtual FReply NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual void NativeConstruct() override;
+	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
@@ -50,6 +69,12 @@ protected:
 
 	UFUNCTION()
 	void HandleCellClicked(FIntPoint Coord);
+
+	UFUNCTION()
+	void HandleCellHoveredWhilePressed(FIntPoint Coord);
+
+	UFUNCTION()
+	void HandleCellMouseReleased();
 
 	void RebuildGrid();
 	void RefreshAllCells();
@@ -61,6 +86,23 @@ protected:
 	void SyncCellDisplayList(UPARAM(ref) TArray<FCellDisplay>& InOutCells);
 	FCellDisplay BuildRandomCellDisplay(TSubclassOf<AGridCellBase> CellType) const;
 	void RebuildDisplayLookupFromArray(const TArray<FCellDisplay>& InCells);
+	void BuildResolvedCellsFromLevelData(
+		const UPushBoxLevelData* SourceData,
+		int32& OutGridWidth,
+		int32& OutGridHeight,
+		TSubclassOf<AGridCellBase>& OutDefaultCellClass,
+		TArray<TSubclassOf<AGridCellBase>>& OutResolvedCells) const;
+	void RefreshWidgetAtIndex(int32 Index);
+	bool IsCellDisplayEqual(const FCellDisplay& A, const FCellDisplay& B) const;
+	void SyncTemporaryLevelDataFromResolved();
+	bool TryGetCoordFromPointer(const FGeometry& InGeometry, const FVector2D& InScreenPosition, FIntPoint& OutCoord) const;
+	int32 CoordToIndex(const FIntPoint& Coord) const;
+	void RefreshSelectionVisuals(const TSet<int32>& OldSelection);
+	void UpdateSelectionFromDragRect();
+	void BuildRectSelectionSet(const FIntPoint& A, const FIntPoint& B, TSet<int32>& OutSet) const;
+	EGridSelectionOp ResolveSelectionOp(const FPointerEvent& InMouseEvent) const;
+	void BeginSelection(const FIntPoint& StartCoord, EGridSelectionOp Op);
+	void EndSelection(bool bCommitSelection);
 	FVector2D GetViewportSize() const;
 	int32 ToIndex(const FIntPoint& Coord) const;
 	bool IsCoordValid(const FIntPoint& Coord) const;
@@ -78,6 +120,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Data")
 	TObjectPtr<UPushBoxLevelData> EditingLevelData;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "LevelEditor|Data")
+	TObjectPtr<UPushBoxLevelData> TemporaryLevelData;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "LevelEditor|Data")
+	TArray<FCellDisplay> TemporaryCellDisplayList;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Data")
 	TSubclassOf<AGridCellBase> DefaultCellClass;
@@ -131,7 +179,14 @@ private:
 	int32 GridWidth = 1;
 	int32 GridHeight = 1;
 	bool bIsPanning = false;
+	bool bIsSelecting = false;
+	bool bSelectionMoved = false;
 	FVector2D LastMouseScreenPos = FVector2D::ZeroVector;
 	FVector2D LastViewportSize = FVector2D::ZeroVector;
 	bool bHasUserAdjustedView = false;
+	FIntPoint SelectionStartCoord = FIntPoint::ZeroValue;
+	FIntPoint SelectionCurrentCoord = FIntPoint::ZeroValue;
+	EGridSelectionOp CurrentSelectionOp = EGridSelectionOp::Replace;
+	TSet<int32> SelectedIndices;
+	TSet<int32> SelectionBaseIndices;
 };

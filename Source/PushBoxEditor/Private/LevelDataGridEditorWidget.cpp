@@ -6,16 +6,13 @@
 #include "Components/UniformGridPanel.h"
 #include "Components/UniformGridSlot.h"
 #include "Engine/Texture2D.h"
+#include "Editor.h"
 #include "GridCellBase.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
+#include "Framework/Application/SlateApplication.h"
 #include "LevelGridCellWidget.h"
-
-bool ULevelDataGridEditorWidget::LoadFromLevelData(UPushBoxLevelData* InData)
-{
-	TArray<FCellDisplay> EmptyList;
-	return LoadFromLevelDataWithCellDisplay(InData, EmptyList);
-}
+#include "PushBoxEditorBridgeSubsystem.h"
 
 bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
 {
@@ -25,63 +22,168 @@ bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelD
 	}
 
 	EditingLevelData = InData;
-	GridWidth = FMath::Max(1, EditingLevelData->GridWidth);
-	GridHeight = FMath::Max(1, EditingLevelData->GridHeight);
-	DefaultCellClass = EditingLevelData->DefaultCellClass;
-
-	ResolvedCells.Empty();
-	ResolvedCells.SetNum(GridWidth * GridHeight);
-	for (int32 Index = 0; Index < ResolvedCells.Num(); ++Index)
+	TemporaryLevelData = DuplicateObject<UPushBoxLevelData>(InData, this);
+	if (!TemporaryLevelData)
 	{
-		ResolvedCells[Index] = DefaultCellClass;
+		return false;
 	}
 
-	for (const FPushBoxCellSpawnData& Def : EditingLevelData->CellDefinitions)
+	BuildResolvedCellsFromLevelData(TemporaryLevelData, GridWidth, GridHeight, DefaultCellClass, ResolvedCells);
+
+	SyncCellDisplayList(InOutCells);
+	TemporaryCellDisplayList = InOutCells;
+	SelectedIndices.Reset();
+	SelectionBaseIndices.Reset();
+	bIsSelecting = false;
+	RebuildGrid();
+	ResetView();
+	SyncTemporaryLevelDataFromResolved();
+	return true;
+}
+
+bool ULevelDataGridEditorWidget::RefreshLevelDisplayWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
+{
+	if (!InData)
 	{
-		if (!IsCoordValid(Def.GridCoord))
+		return false;
+	}
+
+	if (!TemporaryLevelData)
+	{
+		return LoadFromLevelDataWithCellDisplay(InData, InOutCells);
+	}
+
+	int32 NewGridWidth = 1;
+	int32 NewGridHeight = 1;
+	TSubclassOf<AGridCellBase> NewDefaultCellClass;
+	TArray<TSubclassOf<AGridCellBase>> NewResolvedCells;
+	BuildResolvedCellsFromLevelData(InData, NewGridWidth, NewGridHeight, NewDefaultCellClass, NewResolvedCells);
+
+	const bool bGridShapeChanged = (NewGridWidth != GridWidth) || (NewGridHeight != GridHeight);
+	const bool bDefaultChanged = (NewDefaultCellClass != DefaultCellClass);
+	const bool bRequireFullRebuild = bGridShapeChanged;
+
+	const TSubclassOf<AGridCellBase> OldDefaultClass = DefaultCellClass;
+	const TArray<TSubclassOf<AGridCellBase>> OldResolvedCells = ResolvedCells;
+	EditingLevelData = InData;
+	TemporaryLevelData->CopyFromLevelData(InData);
+
+	TMap<TSubclassOf<AGridCellBase>, FCellDisplay> OldLookup = CellDisplayLookup;
+
+	GridWidth = NewGridWidth;
+	GridHeight = NewGridHeight;
+	DefaultCellClass = NewDefaultCellClass;
+	ResolvedCells = MoveTemp(NewResolvedCells);
+
+	SyncCellDisplayList(InOutCells);
+	TemporaryCellDisplayList = InOutCells;
+
+	if (bRequireFullRebuild)
+	{
+		const TSet<int32> OldSelection = SelectedIndices;
+		TSet<int32> NewSelection;
+		for (const int32 Index : OldSelection)
+		{
+			if (Index >= 0 && Index < (GridWidth * GridHeight))
+			{
+				NewSelection.Add(Index);
+			}
+		}
+		SelectedIndices = MoveTemp(NewSelection);
+
+		RebuildGrid();
+		SyncTemporaryLevelDataFromResolved();
+		return true;
+	}
+
+	TSet<int32> DirtyIndices;
+
+	const int32 CompareCount = FMath::Min(ResolvedCells.Num(), OldResolvedCells.Num());
+	for (int32 Index = 0; Index < CompareCount; ++Index)
+	{
+		if (ResolvedCells[Index] != OldResolvedCells[Index])
+		{
+			DirtyIndices.Add(Index);
+		}
+	}
+
+	if (bDefaultChanged)
+	{
+		const int32 DefaultCompareCount = FMath::Min(ResolvedCells.Num(), OldResolvedCells.Num());
+		for (int32 Index = 0; Index < DefaultCompareCount; ++Index)
+		{
+			if (ResolvedCells[Index] == DefaultCellClass || OldResolvedCells[Index] == OldDefaultClass)
+			{
+				DirtyIndices.Add(Index);
+			}
+		}
+	}
+
+	// Display diff: determine which cell types changed style.
+	TSet<TSubclassOf<AGridCellBase>> ChangedDisplayTypes;
+	TMap<TSubclassOf<AGridCellBase>, FCellDisplay> NewLookup;
+	for (const FCellDisplay& NewDisplay : InOutCells)
+	{
+		if (!NewDisplay.CellType)
 		{
 			continue;
 		}
 
-		ResolvedCells[ToIndex(Def.GridCoord)] = Def.CellClass;
+		NewLookup.Add(NewDisplay.CellType, NewDisplay);
+		if (const FCellDisplay* OldDisplay = OldLookup.Find(NewDisplay.CellType))
+		{
+			if (!IsCellDisplayEqual(*OldDisplay, NewDisplay))
+			{
+				ChangedDisplayTypes.Add(NewDisplay.CellType);
+			}
+		}
+		else
+		{
+			ChangedDisplayTypes.Add(NewDisplay.CellType);
+		}
 	}
 
-	SyncCellDisplayList(InOutCells);
-	RebuildGrid();
-	ResetView();
+	for (const TPair<TSubclassOf<AGridCellBase>, FCellDisplay>& OldPair : OldLookup)
+	{
+		if (!NewLookup.Contains(OldPair.Key))
+		{
+			ChangedDisplayTypes.Add(OldPair.Key);
+		}
+	}
+
+	if (ChangedDisplayTypes.Num() > 0)
+	{
+		for (int32 Index = 0; Index < ResolvedCells.Num(); ++Index)
+		{
+			if (ChangedDisplayTypes.Contains(ResolvedCells[Index]))
+			{
+				DirtyIndices.Add(Index);
+			}
+		}
+	}
+
+	for (const int32 DirtyIndex : DirtyIndices)
+	{
+		RefreshWidgetAtIndex(DirtyIndex);
+	}
+
+	SyncTemporaryLevelDataFromResolved();
 	return true;
 }
 
 bool ULevelDataGridEditorWidget::WriteBackToLevelData()
 {
-	if (!EditingLevelData)
+	if (!EditingLevelData || !TemporaryLevelData)
 	{
 		return false;
 	}
 
-	EditingLevelData->GridWidth = FMath::Max(1, GridWidth);
-	EditingLevelData->GridHeight = FMath::Max(1, GridHeight);
-	EditingLevelData->DefaultCellClass = DefaultCellClass;
+	SyncTemporaryLevelDataFromResolved();
 
-	EditingLevelData->CellDefinitions.Reset();
-
-	for (int32 Y = 0; Y < GridHeight; ++Y)
-	{
-		for (int32 X = 0; X < GridWidth; ++X)
-		{
-			const int32 Index = ToIndex(FIntPoint(X, Y));
-			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : nullptr;
-			if (CellClass == DefaultCellClass)
-			{
-				continue;
-			}
-
-			FPushBoxCellSpawnData NewDef;
-			NewDef.GridCoord = FIntPoint(X, Y);
-			NewDef.CellClass = CellClass;
-			EditingLevelData->CellDefinitions.Add(NewDef);
-		}
-	}
+	EditingLevelData->GridWidth = TemporaryLevelData->GridWidth;
+	EditingLevelData->GridHeight = TemporaryLevelData->GridHeight;
+	EditingLevelData->DefaultCellClass = TemporaryLevelData->DefaultCellClass;
+	EditingLevelData->CellDefinitions = TemporaryLevelData->CellDefinitions;
 
 	return true;
 }
@@ -126,6 +228,75 @@ void ULevelDataGridEditorWidget::SetMapSize(int32 InWidth, int32 InHeight)
 
 	RebuildGrid();
 	ResetView();
+	TSet<int32> NewSelection;
+	for (const int32 Index : SelectedIndices)
+	{
+		if (Index >= 0 && Index < (GridWidth * GridHeight))
+		{
+			NewSelection.Add(Index);
+		}
+	}
+	SelectedIndices = MoveTemp(NewSelection);
+	SelectionBaseIndices = SelectedIndices;
+	RefreshAllCells();
+	SyncTemporaryLevelDataFromResolved();
+}
+
+bool ULevelDataGridEditorWidget::ApplyCellDisplayToSelection(const FCellDisplay& InDisplay)
+{
+	if (SelectedIndices.Num() == 0 || !InDisplay.CellType)
+	{
+		return false;
+	}
+
+	bool bAppliedAny = false;
+	for (const int32 Index : SelectedIndices)
+	{
+		if (!ResolvedCells.IsValidIndex(Index))
+		{
+			continue;
+		}
+
+		ResolvedCells[Index] = InDisplay.CellType;
+		RefreshWidgetAtIndex(Index);
+		bAppliedAny = true;
+	}
+
+	if (!bAppliedAny)
+	{
+		return false;
+	}
+
+	bool bUpdatedDisplay = false;
+	for (FCellDisplay& Display : TemporaryCellDisplayList)
+	{
+		if (Display.CellType == InDisplay.CellType)
+		{
+			Display = InDisplay;
+			bUpdatedDisplay = true;
+			break;
+		}
+	}
+	if (!bUpdatedDisplay)
+	{
+		TemporaryCellDisplayList.Add(InDisplay);
+	}
+	RebuildDisplayLookupFromArray(TemporaryCellDisplayList);
+
+	for (const int32 Index : SelectedIndices)
+	{
+		RefreshWidgetAtIndex(Index);
+	}
+	SyncTemporaryLevelDataFromResolved();
+	return true;
+}
+
+void ULevelDataGridEditorWidget::ClearSelection()
+{
+	const TSet<int32> OldSelection = SelectedIndices;
+	SelectedIndices.Reset();
+	SelectionBaseIndices.Reset();
+	RefreshSelectionVisuals(OldSelection);
 }
 
 void ULevelDataGridEditorWidget::SetActiveBrushCellClass(TSubclassOf<AGridCellBase> InClass)
@@ -141,16 +312,45 @@ void ULevelDataGridEditorWidget::ClearToDefault()
 	}
 
 	RefreshAllCells();
+	SyncTemporaryLevelDataFromResolved();
 }
 
 void ULevelDataGridEditorWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	SetVisibility(ESlateVisibility::Visible);
+	SetIsEnabled(true);
 	SetIsFocusable(true);
+
+	if (GEditor)
+	{
+		if (UPushBoxEditorBridgeSubsystem* Bridge = GEditor->GetEditorSubsystem<UPushBoxEditorBridgeSubsystem>())
+		{
+			Bridge->RegisterActiveMapEditor(this);
+		}
+	}
 
 	CurrentZoom = FMath::Clamp(CurrentZoom, ZoomMin, ZoomMax);
 	UpdateContentBaseSize();
 	ApplyTransform();
+}
+
+void ULevelDataGridEditorWidget::NativeDestruct()
+{
+	if (GEditor)
+	{
+		if (UPushBoxEditorBridgeSubsystem* Bridge = GEditor->GetEditorSubsystem<UPushBoxEditorBridgeSubsystem>())
+		{
+			Bridge->UnregisterActiveMapEditor(this);
+		}
+	}
+
+	Super::NativeDestruct();
+}
+
+FReply ULevelDataGridEditorWidget::NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	return Super::NativeOnPreviewMouseButtonDown(InGeometry, InMouseEvent);
 }
 
 void ULevelDataGridEditorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -187,6 +387,12 @@ FReply ULevelDataGridEditorWidget::NativeOnMouseButtonDown(const FGeometry& InGe
 
 FReply ULevelDataGridEditorWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && bIsSelecting)
+	{
+		EndSelection(true);
+		return FReply::Handled().ReleaseMouseCapture();
+	}
+
 	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton && bIsPanning)
 	{
 		bIsPanning = false;
@@ -198,6 +404,30 @@ FReply ULevelDataGridEditorWidget::NativeOnMouseButtonUp(const FGeometry& InGeom
 
 FReply ULevelDataGridEditorWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	if (bIsSelecting)
+	{
+		if (!InMouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton))
+		{
+			EndSelection(true);
+			return FReply::Handled();
+		}
+
+		FIntPoint Coord = FIntPoint::ZeroValue;
+		if (!TryGetCoordFromPointer(InGeometry, InMouseEvent.GetScreenSpacePosition(), Coord))
+		{
+			return FReply::Handled();
+		}
+
+		if (Coord != SelectionCurrentCoord)
+		{
+			SelectionCurrentCoord = Coord;
+			bSelectionMoved = true;
+			UpdateSelectionFromDragRect();
+		}
+
+		return FReply::Handled();
+	}
+
 	if (bIsPanning)
 	{
 		const FVector2D MousePos = InMouseEvent.GetScreenSpacePosition();
@@ -256,10 +486,58 @@ void ULevelDataGridEditorWidget::HandleCellClicked(FIntPoint Coord)
 		return;
 	}
 
-	ResolvedCells[Index] = ActiveBrushCellClass;
-	if (SpawnedCellWidgets.IsValidIndex(Index) && SpawnedCellWidgets[Index])
+	const TSet<int32> OldSelection = SelectedIndices;
+	const FModifierKeysState Modifiers = FSlateApplication::Get().GetModifierKeys();
+	EGridSelectionOp Op = EGridSelectionOp::Replace;
+	if (Modifiers.IsControlDown())
 	{
-		SpawnedCellWidgets[Index]->SetCellData(Coord, ResolvedCells[Index], true);
+		Op = EGridSelectionOp::Remove;
+	}
+	else if (Modifiers.IsShiftDown())
+	{
+		Op = EGridSelectionOp::Add;
+	}
+
+	if (Op == EGridSelectionOp::Replace)
+	{
+		SelectedIndices.Reset();
+		SelectedIndices.Add(Index);
+	}
+	else if (Op == EGridSelectionOp::Add)
+	{
+		SelectedIndices.Add(Index);
+	}
+	else
+	{
+		SelectedIndices.Remove(Index);
+	}
+
+	SelectionBaseIndices = SelectedIndices;
+	bIsSelecting = false;
+	bSelectionMoved = false;
+	RefreshSelectionVisuals(OldSelection);
+}
+
+void ULevelDataGridEditorWidget::HandleCellHoveredWhilePressed(FIntPoint Coord)
+{
+	if (!bIsSelecting || !IsCoordValid(Coord))
+	{
+		return;
+	}
+
+	if (Coord != SelectionCurrentCoord)
+	{
+		SelectionCurrentCoord = Coord;
+		bSelectionMoved = true;
+		UpdateSelectionFromDragRect();
+	}
+}
+
+void ULevelDataGridEditorWidget::HandleCellMouseReleased()
+{
+	if (bIsSelecting)
+	{
+		EndSelection(true);
 	}
 }
 
@@ -305,6 +583,8 @@ void ULevelDataGridEditorWidget::RebuildGrid()
 				CellWidget->SetDisplayStyle(FLinearColor(0.75f, 0.75f, 0.75f, 1.0f), nullptr);
 			}
 			CellWidget->OnCellClicked.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellClicked);
+			CellWidget->OnCellHoveredWhilePressed.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellHoveredWhilePressed);
+			CellWidget->OnCellMouseReleased.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellMouseReleased);
 
 			if (UUniformGridSlot* GridSlot = GridPanel->AddChildToUniformGrid(CellWidget, Y, X))
 			{
@@ -337,16 +617,7 @@ void ULevelDataGridEditorWidget::RefreshAllCells()
 				continue;
 			}
 
-			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass;
-			SpawnedCellWidgets[Index]->SetCellData(Coord, CellClass, true);
-			if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
-			{
-				SpawnedCellWidgets[Index]->SetDisplayStyle(Display->BGColor, Display->Icon);
-			}
-			else
-			{
-				SpawnedCellWidgets[Index]->SetDisplayStyle(FLinearColor(0.75f, 0.75f, 0.75f, 1.0f), nullptr);
-			}
+			RefreshWidgetAtIndex(Index);
 		}
 	}
 }
@@ -522,4 +793,223 @@ void ULevelDataGridEditorWidget::RebuildDisplayLookupFromArray(const TArray<FCel
 			CellDisplayLookup.Add(Display.CellType, Display);
 		}
 	}
+}
+
+void ULevelDataGridEditorWidget::SyncTemporaryLevelDataFromResolved()
+{
+	if (!TemporaryLevelData)
+	{
+		return;
+	}
+
+	TemporaryLevelData->GridWidth = FMath::Max(1, GridWidth);
+	TemporaryLevelData->GridHeight = FMath::Max(1, GridHeight);
+	TemporaryLevelData->DefaultCellClass = DefaultCellClass;
+	TemporaryLevelData->CellDefinitions.Reset();
+
+	for (int32 Y = 0; Y < GridHeight; ++Y)
+	{
+		for (int32 X = 0; X < GridWidth; ++X)
+		{
+			const int32 Index = ToIndex(FIntPoint(X, Y));
+			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : nullptr;
+			if (CellClass == DefaultCellClass)
+			{
+				continue;
+			}
+
+			FPushBoxCellSpawnData NewDef;
+			NewDef.GridCoord = FIntPoint(X, Y);
+			NewDef.CellClass = CellClass;
+			TemporaryLevelData->CellDefinitions.Add(NewDef);
+		}
+	}
+}
+
+void ULevelDataGridEditorWidget::BuildResolvedCellsFromLevelData(
+	const UPushBoxLevelData* SourceData,
+	int32& OutGridWidth,
+	int32& OutGridHeight,
+	TSubclassOf<AGridCellBase>& OutDefaultCellClass,
+	TArray<TSubclassOf<AGridCellBase>>& OutResolvedCells) const
+{
+	OutGridWidth = FMath::Max(1, SourceData ? SourceData->GridWidth : 1);
+	OutGridHeight = FMath::Max(1, SourceData ? SourceData->GridHeight : 1);
+	OutDefaultCellClass = SourceData ? SourceData->DefaultCellClass : nullptr;
+
+	OutResolvedCells.Reset();
+	OutResolvedCells.SetNum(OutGridWidth * OutGridHeight);
+	for (int32 Index = 0; Index < OutResolvedCells.Num(); ++Index)
+	{
+		OutResolvedCells[Index] = OutDefaultCellClass;
+	}
+
+	if (!SourceData)
+	{
+		return;
+	}
+
+	for (const FPushBoxCellSpawnData& Def : SourceData->CellDefinitions)
+	{
+		if (Def.GridCoord.X < 0 || Def.GridCoord.X >= OutGridWidth || Def.GridCoord.Y < 0 || Def.GridCoord.Y >= OutGridHeight)
+		{
+			continue;
+		}
+
+		const int32 Index = Def.GridCoord.Y * OutGridWidth + Def.GridCoord.X;
+		if (OutResolvedCells.IsValidIndex(Index))
+		{
+			OutResolvedCells[Index] = Def.CellClass;
+		}
+	}
+}
+
+void ULevelDataGridEditorWidget::RefreshWidgetAtIndex(int32 Index)
+{
+	if (!SpawnedCellWidgets.IsValidIndex(Index) || !SpawnedCellWidgets[Index])
+	{
+		return;
+	}
+
+	const int32 X = Index % GridWidth;
+	const int32 Y = Index / GridWidth;
+	const FIntPoint Coord(X, Y);
+	const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass;
+
+	SpawnedCellWidgets[Index]->SetCellData(Coord, CellClass, true);
+	if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
+	{
+		SpawnedCellWidgets[Index]->SetDisplayStyle(Display->BGColor, Display->Icon);
+	}
+	else
+	{
+		SpawnedCellWidgets[Index]->SetDisplayStyle(FLinearColor(0.75f, 0.75f, 0.75f, 1.0f), nullptr);
+	}
+	SpawnedCellWidgets[Index]->SetSelectedState(SelectedIndices.Contains(Index));
+}
+
+bool ULevelDataGridEditorWidget::IsCellDisplayEqual(const FCellDisplay& A, const FCellDisplay& B) const
+{
+	return A.CellType == B.CellType && A.Icon == B.Icon && A.BGColor.Equals(B.BGColor, KINDA_SMALL_NUMBER);
+}
+
+bool ULevelDataGridEditorWidget::TryGetCoordFromPointer(const FGeometry& InGeometry, const FVector2D& InScreenPosition, FIntPoint& OutCoord) const
+{
+	const FVector2D Local = InGeometry.AbsoluteToLocal(InScreenPosition);
+	const FVector2D ContentLocal = (Local - PanOffset) / FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
+
+	const int32 X = FMath::FloorToInt(ContentLocal.X / FMath::Max(CellPixelSize, 1.0f));
+	const int32 Y = FMath::FloorToInt(ContentLocal.Y / FMath::Max(CellPixelSize, 1.0f));
+	const FIntPoint Coord(X, Y);
+	if (!IsCoordValid(Coord))
+	{
+		return false;
+	}
+
+	OutCoord = Coord;
+	return true;
+}
+
+int32 ULevelDataGridEditorWidget::CoordToIndex(const FIntPoint& Coord) const
+{
+	if (!IsCoordValid(Coord))
+	{
+		return INDEX_NONE;
+	}
+	return ToIndex(Coord);
+}
+
+void ULevelDataGridEditorWidget::RefreshSelectionVisuals(const TSet<int32>& OldSelection)
+{
+	TSet<int32> Dirty = OldSelection;
+	Dirty.Append(SelectedIndices);
+	for (const int32 Index : Dirty)
+	{
+		RefreshWidgetAtIndex(Index);
+	}
+}
+
+void ULevelDataGridEditorWidget::UpdateSelectionFromDragRect()
+{
+	TSet<int32> RectSet;
+	BuildRectSelectionSet(SelectionStartCoord, SelectionCurrentCoord, RectSet);
+
+	const TSet<int32> OldSelection = SelectedIndices;
+	if (CurrentSelectionOp == EGridSelectionOp::Replace)
+	{
+		SelectedIndices = MoveTemp(RectSet);
+	}
+	else if (CurrentSelectionOp == EGridSelectionOp::Add)
+	{
+		SelectedIndices = SelectionBaseIndices;
+		SelectedIndices.Append(RectSet);
+	}
+	else
+	{
+		SelectedIndices = SelectionBaseIndices;
+		for (const int32 Index : RectSet)
+		{
+			SelectedIndices.Remove(Index);
+		}
+	}
+
+	RefreshSelectionVisuals(OldSelection);
+}
+
+void ULevelDataGridEditorWidget::BuildRectSelectionSet(const FIntPoint& A, const FIntPoint& B, TSet<int32>& OutSet) const
+{
+	OutSet.Reset();
+	const int32 MinX = FMath::Min(A.X, B.X);
+	const int32 MaxX = FMath::Max(A.X, B.X);
+	const int32 MinY = FMath::Min(A.Y, B.Y);
+	const int32 MaxY = FMath::Max(A.Y, B.Y);
+
+	for (int32 Y = MinY; Y <= MaxY; ++Y)
+	{
+		for (int32 X = MinX; X <= MaxX; ++X)
+		{
+			const int32 Index = CoordToIndex(FIntPoint(X, Y));
+			if (Index != INDEX_NONE)
+			{
+				OutSet.Add(Index);
+			}
+		}
+	}
+}
+
+EGridSelectionOp ULevelDataGridEditorWidget::ResolveSelectionOp(const FPointerEvent& InMouseEvent) const
+{
+	if (InMouseEvent.IsControlDown())
+	{
+		return EGridSelectionOp::Remove;
+	}
+	if (InMouseEvent.IsShiftDown())
+	{
+		return EGridSelectionOp::Add;
+	}
+	return EGridSelectionOp::Replace;
+}
+
+void ULevelDataGridEditorWidget::BeginSelection(const FIntPoint& StartCoord, EGridSelectionOp Op)
+{
+	bIsSelecting = true;
+	bSelectionMoved = false;
+	SelectionStartCoord = StartCoord;
+	SelectionCurrentCoord = StartCoord;
+	CurrentSelectionOp = Op;
+	SelectionBaseIndices = SelectedIndices;
+	UpdateSelectionFromDragRect();
+}
+
+void ULevelDataGridEditorWidget::EndSelection(bool bCommitSelection)
+{
+	if (!bCommitSelection)
+	{
+		SelectedIndices = SelectionBaseIndices;
+		RefreshSelectionVisuals(SelectionBaseIndices);
+	}
+
+	bIsSelecting = false;
+	bSelectionMoved = false;
+	SelectionBaseIndices = SelectedIndices;
 }

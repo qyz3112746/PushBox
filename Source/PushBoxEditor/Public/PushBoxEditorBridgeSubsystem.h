@@ -20,4 +20,17 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "PushBox|LevelTool")
 	void BroadcastApplyCellDisplayRequested(const FCellDisplay& Payload, const FString& PropertyPath);
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|LevelTool")
+	void RegisterActiveMapEditor(class ULevelDataGridEditorWidget* InMapEditor);
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|LevelTool")
+	void UnregisterActiveMapEditor(class ULevelDataGridEditorWidget* InMapEditor);
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|LevelTool")
+	bool ApplyToActiveMapEditor(const FCellDisplay& Payload);
+
+private:
+	UPROPERTY(Transient)
+	TObjectPtr<class ULevelDataGridEditorWidget> ActiveMapEditor;
 };
