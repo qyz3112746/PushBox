@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "PushBoxLevelData.h"
+#include "SaveDataTypes.h"
 #include "LevelDataGridEditorWidget.generated.h"
 
 class UCanvasPanel;
@@ -20,6 +21,9 @@ class PUSHBOXEDITOR_API ULevelDataGridEditorWidget : public UUserWidget
 public:
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool LoadFromLevelData(UPushBoxLevelData* InData);
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
+	bool LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool WriteBackToLevelData();
@@ -54,6 +58,9 @@ protected:
 	void ResetView();
 	float ComputeFitZoom() const;
 	void AutoFitView(bool bResetPan);
+	void SyncCellDisplayList(UPARAM(ref) TArray<FCellDisplay>& InOutCells);
+	FCellDisplay BuildRandomCellDisplay(TSubclassOf<AGridCellBase> CellType) const;
+	void RebuildDisplayLookupFromArray(const TArray<FCellDisplay>& InCells);
 	FVector2D GetViewportSize() const;
 	int32 ToIndex(const FIntPoint& Coord) const;
 	bool IsCoordValid(const FIntPoint& Coord) const;
@@ -117,6 +124,9 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<TSubclassOf<AGridCellBase>> ResolvedCells;
+
+	UPROPERTY(Transient)
+	TMap<TSubclassOf<AGridCellBase>, FCellDisplay> CellDisplayLookup;
 
 	int32 GridWidth = 1;
 	int32 GridHeight = 1;

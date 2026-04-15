@@ -3,8 +3,10 @@
 #include "LevelGridCellWidget.h"
 
 #include "Components/Border.h"
+#include "Components/Image.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
+#include "Engine/Texture2D.h"
 #include "GridCellBase.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
@@ -14,6 +16,13 @@ void ULevelGridCellWidget::SetCellData(const FIntPoint& InCoord, TSubclassOf<AGr
 	Coord = InCoord;
 	CellClass = InCellClass;
 	bIsValidCoord = bInIsValidCoord;
+	RefreshVisuals();
+}
+
+void ULevelGridCellWidget::SetDisplayStyle(const FLinearColor& InColor, UTexture2D* InIcon)
+{
+	DisplayColor = InColor;
+	DisplayIcon = InIcon;
 	RefreshVisuals();
 }
 
@@ -50,7 +59,21 @@ void ULevelGridCellWidget::RefreshVisuals()
 {
 	if (CellBorder)
 	{
-		CellBorder->SetBrushColor(bIsValidCoord ? ValidCellColor : InvalidCellColor);
+		const FLinearColor EffectiveColor = bIsValidCoord ? DisplayColor : InvalidCellColor;
+		CellBorder->SetBrushColor(EffectiveColor);
+	}
+
+	if (CellIconImage)
+	{
+		if (bIsValidCoord && DisplayIcon)
+		{
+			CellIconImage->SetBrushFromTexture(DisplayIcon, true);
+			CellIconImage->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+		}
+		else
+		{
+			CellIconImage->SetVisibility(ESlateVisibility::Collapsed);
+		}
 	}
 
 	if (CellLabel)

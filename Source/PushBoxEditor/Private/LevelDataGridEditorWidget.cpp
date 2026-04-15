@@ -5,12 +5,19 @@
 #include "Components/CanvasPanel.h"
 #include "Components/UniformGridPanel.h"
 #include "Components/UniformGridSlot.h"
+#include "Engine/Texture2D.h"
 #include "GridCellBase.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "LevelGridCellWidget.h"
 
 bool ULevelDataGridEditorWidget::LoadFromLevelData(UPushBoxLevelData* InData)
+{
+	TArray<FCellDisplay> EmptyList;
+	return LoadFromLevelDataWithCellDisplay(InData, EmptyList);
+}
+
+bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
 {
 	if (!InData)
 	{
@@ -39,6 +46,7 @@ bool ULevelDataGridEditorWidget::LoadFromLevelData(UPushBoxLevelData* InData)
 		ResolvedCells[ToIndex(Def.GridCoord)] = Def.CellClass;
 	}
 
+	SyncCellDisplayList(InOutCells);
 	RebuildGrid();
 	ResetView();
 	return true;
@@ -288,6 +296,14 @@ void ULevelDataGridEditorWidget::RebuildGrid()
 
 			CellWidget->SetCellVisualSize(CellPixelSize);
 			CellWidget->SetCellData(Coord, CellClass, true);
+			if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
+			{
+				CellWidget->SetDisplayStyle(Display->BGColor, Display->Icon);
+			}
+			else
+			{
+				CellWidget->SetDisplayStyle(FLinearColor(0.75f, 0.75f, 0.75f, 1.0f), nullptr);
+			}
 			CellWidget->OnCellClicked.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellClicked);
 
 			if (UUniformGridSlot* GridSlot = GridPanel->AddChildToUniformGrid(CellWidget, Y, X))
@@ -321,7 +337,16 @@ void ULevelDataGridEditorWidget::RefreshAllCells()
 				continue;
 			}
 
-			SpawnedCellWidgets[Index]->SetCellData(Coord, ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass, true);
+			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass;
+			SpawnedCellWidgets[Index]->SetCellData(Coord, CellClass, true);
+			if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
+			{
+				SpawnedCellWidgets[Index]->SetDisplayStyle(Display->BGColor, Display->Icon);
+			}
+			else
+			{
+				SpawnedCellWidgets[Index]->SetDisplayStyle(FLinearColor(0.75f, 0.75f, 0.75f, 1.0f), nullptr);
+			}
 		}
 	}
 }
@@ -438,4 +463,63 @@ bool ULevelDataGridEditorWidget::IsCoordValid(const FIntPoint& Coord) const
 void ULevelDataGridEditorWidget::UpdateContentBaseSize()
 {
 	ContentBaseSize = FVector2D(GridWidth * CellPixelSize, GridHeight * CellPixelSize);
+}
+
+void ULevelDataGridEditorWidget::SyncCellDisplayList(TArray<FCellDisplay>& InOutCells)
+{
+	TSet<TSubclassOf<AGridCellBase>> UniqueCellTypes;
+	for (const TSubclassOf<AGridCellBase>& CellClass : ResolvedCells)
+	{
+		if (CellClass)
+		{
+			UniqueCellTypes.Add(CellClass);
+		}
+	}
+
+	TSet<TSubclassOf<AGridCellBase>> ExistingTypes;
+	for (const FCellDisplay& Display : InOutCells)
+	{
+		if (Display.CellType)
+		{
+			ExistingTypes.Add(Display.CellType);
+		}
+	}
+
+	for (const TSubclassOf<AGridCellBase>& CellType : UniqueCellTypes)
+	{
+		if (!ExistingTypes.Contains(CellType))
+		{
+			InOutCells.Add(BuildRandomCellDisplay(CellType));
+		}
+	}
+
+	RebuildDisplayLookupFromArray(InOutCells);
+}
+
+FCellDisplay ULevelDataGridEditorWidget::BuildRandomCellDisplay(TSubclassOf<AGridCellBase> CellType) const
+{
+	FCellDisplay NewDisplay;
+	NewDisplay.CellType = CellType;
+	NewDisplay.Icon = nullptr;
+
+	const float Hue = FMath::FRandRange(0.0f, 360.0f);
+	const float Saturation = FMath::FRandRange(0.55f, 0.85f);
+	const float Value = FMath::FRandRange(0.70f, 0.95f);
+	NewDisplay.BGColor = FLinearColor::MakeFromHSV8(
+		static_cast<uint8>(Hue / 360.0f * 255.0f),
+		static_cast<uint8>(Saturation * 255.0f),
+		static_cast<uint8>(Value * 255.0f));
+	return NewDisplay;
+}
+
+void ULevelDataGridEditorWidget::RebuildDisplayLookupFromArray(const TArray<FCellDisplay>& InCells)
+{
+	CellDisplayLookup.Reset();
+	for (const FCellDisplay& Display : InCells)
+	{
+		if (Display.CellType)
+		{
+			CellDisplayLookup.Add(Display.CellType, Display);
+		}
+	}
 }

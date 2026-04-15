@@ -9,6 +9,8 @@
 class UBorder;
 class USizeBox;
 class UTextBlock;
+class UImage;
+class UTexture2D;
 class AGridCellBase;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLevelGridCellClicked, FIntPoint, Coord);
@@ -24,6 +26,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Grid")
 	void SetCellData(const FIntPoint& InCoord, TSubclassOf<AGridCellBase> InCellClass, bool bInIsValidCoord);
+
+	UFUNCTION(BlueprintCallable, Category = "Grid")
+	void SetDisplayStyle(const FLinearColor& InColor, UTexture2D* InIcon);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid")
 	void SetCellVisualSize(float InSize);
@@ -56,6 +61,9 @@ protected:
 	UPROPERTY(meta = (BindWidgetOptional), BlueprintReadOnly, Category = "Grid")
 	TObjectPtr<UTextBlock> CellLabel;
 
+	UPROPERTY(meta = (BindWidgetOptional), BlueprintReadOnly, Category = "Grid")
+	TObjectPtr<UImage> CellIconImage;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid|Style")
 	FLinearColor ValidCellColor = FLinearColor(0.75f, 0.75f, 0.75f, 1.0f);
 
@@ -73,4 +81,10 @@ protected:
 
 	UPROPERTY(BlueprintReadOnly, Category = "Grid")
 	bool bIsValidCoord = true;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Grid")
+	FLinearColor DisplayColor = FLinearColor(0.75f, 0.75f, 0.75f, 1.0f);
+
+	UPROPERTY(BlueprintReadOnly, Category = "Grid")
+	TObjectPtr<UTexture2D> DisplayIcon = nullptr;
 };
