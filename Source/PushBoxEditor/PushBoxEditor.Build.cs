@@ -19,7 +19,14 @@ public class PushBoxEditor : ModuleRules
 			"SlateCore",
 			"Blutility",
 			"InputCore",
-			"PushBox"
+			"PushBox",
+			"EditorSubsystem"
+		});
+
+		PrivateDependencyModuleNames.AddRange(new string[]
+		{
+			"PropertyEditor",
+			"UnrealEd"
 		});
 
 		PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "..", "PushBox"));
