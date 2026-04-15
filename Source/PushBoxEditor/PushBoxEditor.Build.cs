@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
+using System.IO;
 
 public class PushBoxEditor : ModuleRules
 {
@@ -16,7 +17,11 @@ public class PushBoxEditor : ModuleRules
 			"UMG",
 			"Slate",
 			"SlateCore",
-			"Blutility"
+			"Blutility",
+			"InputCore",
+			"PushBox"
 		});
+
+		PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "..", "PushBox"));
 	}
 }

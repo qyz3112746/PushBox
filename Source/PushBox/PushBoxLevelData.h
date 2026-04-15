@@ -21,7 +21,7 @@ struct FPushBoxCellSpawnData
 };
 
 UCLASS(BlueprintType)
-class UPushBoxLevelData : public UDataAsset
+class PUSHBOX_API UPushBoxLevelData : public UDataAsset
 {
 	GENERATED_BODY()
 

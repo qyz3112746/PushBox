@@ -38,7 +38,7 @@ struct FCellMoveContext
 };
 
 UCLASS(Blueprintable, meta = (PrioritizeCategories = "Cell"))
-class AGridCellBase : public AActor
+class PUSHBOX_API AGridCellBase : public AActor
 {
 	GENERATED_BODY()
 
