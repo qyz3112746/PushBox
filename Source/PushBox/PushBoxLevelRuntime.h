@@ -67,13 +67,6 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
-	struct FLevelValidationResult
-	{
-		bool bIsValid = false;
-		FIntPoint PlayerSpawnCoord = FIntPoint::ZeroValue;
-		TMap<TSubclassOf<ABoxTargetCell>, int32> TargetCountsByType;
-	};
-
 	UPROPERTY(Transient)
 	UPushBoxLevelData* CurrentLevelData;
 
@@ -96,7 +89,6 @@ private:
 	bool bHasPlayerLockedZ;
 	float PlayerLockedZ;
 
-	bool ValidateLevelData(const UPushBoxLevelData* InLevelData, FLevelValidationResult& OutValidation) const;
 	void ClearSpawnedLevel();
 	AGridCellBase* SpawnCell(const TSubclassOf<AGridCellBase>& CellClass, const FIntPoint& GridCoord);
 	void RegisterSpawnedCell(AGridCellBase* SpawnedCell);

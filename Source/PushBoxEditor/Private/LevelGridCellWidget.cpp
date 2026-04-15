@@ -7,6 +7,7 @@
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GridCellBase.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
@@ -70,10 +71,20 @@ void ULevelGridCellWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const
 {
 	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
 
-	if (bIsValidCoord && InMouseEvent.IsMouseButtonDown(EKeys::LeftMouseButton))
+	if (bIsValidCoord && FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
 	{
 		OnCellHoveredWhilePressed.Broadcast(Coord);
 	}
+}
+
+FReply ULevelGridCellWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	if (bIsValidCoord && FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
+	{
+		OnCellHoveredWhilePressed.Broadcast(Coord);
+	}
+
+	return Super::NativeOnMouseMove(InGeometry, InMouseEvent);
 }
 
 void ULevelGridCellWidget::NativePreConstruct()
@@ -91,7 +102,18 @@ void ULevelGridCellWidget::RefreshVisuals()
 		{
 			EffectiveColor = FLinearColor::LerpUsingHSV(EffectiveColor, SelectionOutlineColor, 0.35f);
 		}
-		CellBorder->SetBrushColor(EffectiveColor);
+
+		const bool bUseBorderIconFallback = bIsValidCoord && DisplayIcon && !CellIconImage;
+		if (bUseBorderIconFallback)
+		{
+			CellBorder->SetBrushFromTexture(DisplayIcon);
+			CellBorder->SetBrushColor(FLinearColor::White);
+		}
+		else
+		{
+			CellBorder->SetBrushFromTexture(nullptr);
+			CellBorder->SetBrushColor(EffectiveColor);
+		}
 	}
 
 	if (SelectionBorder)

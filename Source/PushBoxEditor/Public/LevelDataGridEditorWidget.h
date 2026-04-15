@@ -9,6 +9,7 @@
 #include "LevelDataGridEditorWidget.generated.h"
 
 class UCanvasPanel;
+class UBorder;
 class UUniformGridPanel;
 class ULevelGridCellWidget;
 class AGridCellBase;
@@ -62,6 +63,14 @@ protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+	virtual int32 NativePaint(
+		const FPaintArgs& Args,
+		const FGeometry& AllottedGeometry,
+		const FSlateRect& MyCullingRect,
+		FSlateWindowElementList& OutDrawElements,
+		int32 LayerId,
+		const FWidgetStyle& InWidgetStyle,
+		bool bParentEnabled) const override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual FReply NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
@@ -97,15 +106,22 @@ protected:
 	void SyncTemporaryLevelDataFromResolved();
 	bool TryGetCoordFromPointer(const FGeometry& InGeometry, const FVector2D& InScreenPosition, FIntPoint& OutCoord) const;
 	int32 CoordToIndex(const FIntPoint& Coord) const;
+	FIntPoint ViewToDataCoord(const FIntPoint& ViewCoord) const;
+	FIntPoint DataToViewCoord(const FIntPoint& DataCoord) const;
+	int32 GetViewWidth() const;
+	int32 GetViewHeight() const;
 	void RefreshSelectionVisuals(const TSet<int32>& OldSelection);
 	void UpdateSelectionFromDragRect();
 	void BuildRectSelectionSet(const FIntPoint& A, const FIntPoint& B, TSet<int32>& OutSet) const;
 	EGridSelectionOp ResolveSelectionOp(const FPointerEvent& InMouseEvent) const;
 	void BeginSelection(const FIntPoint& StartCoord, EGridSelectionOp Op);
 	void EndSelection(bool bCommitSelection);
+	void EnsureSelectionMarqueeWidget();
+	void UpdateSelectionMarqueeVisual();
 	FVector2D GetViewportSize() const;
 	int32 ToIndex(const FIntPoint& Coord) const;
 	bool IsCoordValid(const FIntPoint& Coord) const;
+	bool IsViewCoordValid(const FIntPoint& Coord) const;
 	void UpdateContentBaseSize();
 
 protected:
@@ -166,6 +182,15 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "LevelEditor|View")
 	FVector2D ContentBaseSize = FVector2D::ZeroVector;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Selection")
+	FLinearColor SelectionMarqueeColor = FLinearColor(0.25f, 0.55f, 1.0f, 0.18f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Selection")
+	FLinearColor SelectedCellOutlineColor = FLinearColor(1.0f, 0.95f, 0.2f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Selection", meta = (ClampMin = "1.0", ClampMax = "8.0"))
+	float SelectedCellOutlineThickness = 2.0f;
+
 private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<ULevelGridCellWidget>> SpawnedCellWidgets;
@@ -175,6 +200,9 @@ private:
 
 	UPROPERTY(Transient)
 	TMap<TSubclassOf<AGridCellBase>, FCellDisplay> CellDisplayLookup;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBorder> SelectionMarqueeWidget;
 
 	int32 GridWidth = 1;
 	int32 GridHeight = 1;

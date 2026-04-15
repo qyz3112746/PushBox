@@ -3,6 +3,8 @@
 #include "LevelDataGridEditorWidget.h"
 
 #include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/Border.h"
 #include "Components/UniformGridPanel.h"
 #include "Components/UniformGridSlot.h"
 #include "Engine/Texture2D.h"
@@ -13,6 +15,9 @@
 #include "Framework/Application/SlateApplication.h"
 #include "LevelGridCellWidget.h"
 #include "PushBoxEditorBridgeSubsystem.h"
+#include "Blueprint/WidgetTree.h"
+#include "Rendering/DrawElements.h"
+#include "Styling/CoreStyle.h"
 
 bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
 {
@@ -249,8 +254,9 @@ bool ULevelDataGridEditorWidget::ApplyCellDisplayToSelection(const FCellDisplay&
 		return false;
 	}
 
+	const TSet<int32> AppliedSelection = SelectedIndices;
 	bool bAppliedAny = false;
-	for (const int32 Index : SelectedIndices)
+	for (const int32 Index : AppliedSelection)
 	{
 		if (!ResolvedCells.IsValidIndex(Index))
 		{
@@ -283,11 +289,15 @@ bool ULevelDataGridEditorWidget::ApplyCellDisplayToSelection(const FCellDisplay&
 	}
 	RebuildDisplayLookupFromArray(TemporaryCellDisplayList);
 
-	for (const int32 Index : SelectedIndices)
+	for (const int32 Index : AppliedSelection)
 	{
 		RefreshWidgetAtIndex(Index);
 	}
 	SyncTemporaryLevelDataFromResolved();
+
+	SelectedIndices.Reset();
+	SelectionBaseIndices.Reset();
+	RefreshSelectionVisuals(AppliedSelection);
 	return true;
 }
 
@@ -331,6 +341,7 @@ void ULevelDataGridEditorWidget::NativeConstruct()
 	}
 
 	CurrentZoom = FMath::Clamp(CurrentZoom, ZoomMin, ZoomMax);
+	EnsureSelectionMarqueeWidget();
 	UpdateContentBaseSize();
 	ApplyTransform();
 }
@@ -357,6 +368,25 @@ void ULevelDataGridEditorWidget::NativeTick(const FGeometry& MyGeometry, float I
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
+	if (bIsSelecting && FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
+	{
+		const FVector2D CursorScreenPos = FSlateApplication::Get().GetCursorPos();
+		FIntPoint HoverCoord = FIntPoint::ZeroValue;
+		if (TryGetCoordFromPointer(MyGeometry, CursorScreenPos, HoverCoord) && HoverCoord != SelectionCurrentCoord)
+		{
+			SelectionCurrentCoord = HoverCoord;
+			bSelectionMoved = true;
+			UpdateSelectionFromDragRect();
+			UpdateSelectionMarqueeVisual();
+			Invalidate(EInvalidateWidgetReason::Paint);
+		}
+	}
+	else if (bIsSelecting && !FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
+	{
+		EndSelection(true);
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+
 	const FVector2D ViewportSize = GetViewportSize();
 	if (!ViewportSize.Equals(LastViewportSize, 0.5f))
 	{
@@ -371,6 +401,110 @@ void ULevelDataGridEditorWidget::NativeTick(const FGeometry& MyGeometry, float I
 			ApplyTransform();
 		}
 	}
+}
+
+int32 ULevelDataGridEditorWidget::NativePaint(
+	const FPaintArgs& Args,
+	const FGeometry& AllottedGeometry,
+	const FSlateRect& MyCullingRect,
+	FSlateWindowElementList& OutDrawElements,
+	int32 LayerId,
+	const FWidgetStyle& InWidgetStyle,
+	bool bParentEnabled) const
+{
+	const int32 SuperLayer = Super::NativePaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+
+	const float EffectiveZoom = FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
+	const float OutlineThickness = FMath::Max(1.0f, SelectedCellOutlineThickness);
+
+	// Draw selected-cell outlines (always visible, independent of cell fill color).
+	for (const int32 Index : SelectedIndices)
+	{
+		if (Index < 0 || Index >= (GridWidth * GridHeight))
+		{
+			continue;
+		}
+
+		const int32 DataX = Index % GridWidth;
+		const int32 DataY = Index / GridWidth;
+		const FIntPoint ViewCoord = DataToViewCoord(FIntPoint(DataX, DataY));
+		if (!IsViewCoordValid(ViewCoord))
+		{
+			continue;
+		}
+
+		const FVector2D RectPos(
+			PanOffset.X + (static_cast<float>(ViewCoord.X) * CellPixelSize * EffectiveZoom),
+			PanOffset.Y + (static_cast<float>(ViewCoord.Y) * CellPixelSize * EffectiveZoom));
+		const FVector2D RectSize(
+			CellPixelSize * EffectiveZoom,
+			CellPixelSize * EffectiveZoom);
+
+		const FVector2D TopSize(RectSize.X, OutlineThickness);
+		const FVector2D BottomPos(RectPos.X, RectPos.Y + RectSize.Y - OutlineThickness);
+		const FVector2D SideSize(OutlineThickness, RectSize.Y);
+		const FVector2D RightPos(RectPos.X + RectSize.X - OutlineThickness, RectPos.Y);
+
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
+	}
+
+	if (!bIsSelecting || (!bSelectionMoved && SelectionStartCoord == SelectionCurrentCoord))
+	{
+		return SuperLayer + 1;
+	}
+
+	const int32 MinX = FMath::Min(SelectionStartCoord.X, SelectionCurrentCoord.X);
+	const int32 MaxX = FMath::Max(SelectionStartCoord.X, SelectionCurrentCoord.X);
+	const int32 MinY = FMath::Min(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+	const int32 MaxY = FMath::Max(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+
+	const FVector2D RectPos(
+		PanOffset.X + (static_cast<float>(MinX) * CellPixelSize * EffectiveZoom),
+		PanOffset.Y + (static_cast<float>(MinY) * CellPixelSize * EffectiveZoom));
+	const FVector2D RectSize(
+		static_cast<float>(MaxX - MinX + 1) * CellPixelSize * EffectiveZoom,
+		static_cast<float>(MaxY - MinY + 1) * CellPixelSize * EffectiveZoom);
+
+	FSlateDrawElement::MakeBox(
+		OutDrawElements,
+		SuperLayer + 1,
+		AllottedGeometry.ToPaintGeometry(RectPos, RectSize),
+		FCoreStyle::Get().GetBrush("WhiteBrush"),
+		ESlateDrawEffect::None,
+		SelectionMarqueeColor);
+
+	const float BorderThickness = 2.0f;
+	const FLinearColor BorderColor = FLinearColor(SelectionMarqueeColor.R, SelectionMarqueeColor.G, SelectionMarqueeColor.B, 0.9f);
+	const FVector2D TopSize(RectSize.X, BorderThickness);
+	const FVector2D BottomPos(RectPos.X, RectPos.Y + RectSize.Y - BorderThickness);
+	const FVector2D SideSize(BorderThickness, RectSize.Y);
+	const FVector2D RightPos(RectPos.X + RectSize.X - BorderThickness, RectPos.Y);
+
+	FSlateDrawElement::MakeBox(
+		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
+		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+	FSlateDrawElement::MakeBox(
+		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
+		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+	FSlateDrawElement::MakeBox(
+		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
+		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+	FSlateDrawElement::MakeBox(
+		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
+		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+
+	return SuperLayer + 2;
 }
 
 FReply ULevelDataGridEditorWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -475,18 +609,10 @@ FReply ULevelDataGridEditorWidget::NativeOnMouseWheel(const FGeometry& InGeometr
 
 void ULevelDataGridEditorWidget::HandleCellClicked(FIntPoint Coord)
 {
-	if (!IsCoordValid(Coord))
+	if (!IsViewCoordValid(Coord))
 	{
 		return;
 	}
-
-	const int32 Index = ToIndex(Coord);
-	if (!ResolvedCells.IsValidIndex(Index))
-	{
-		return;
-	}
-
-	const TSet<int32> OldSelection = SelectedIndices;
 	const FModifierKeysState Modifiers = FSlateApplication::Get().GetModifierKeys();
 	EGridSelectionOp Op = EGridSelectionOp::Replace;
 	if (Modifiers.IsControlDown())
@@ -498,29 +624,13 @@ void ULevelDataGridEditorWidget::HandleCellClicked(FIntPoint Coord)
 		Op = EGridSelectionOp::Add;
 	}
 
-	if (Op == EGridSelectionOp::Replace)
-	{
-		SelectedIndices.Reset();
-		SelectedIndices.Add(Index);
-	}
-	else if (Op == EGridSelectionOp::Add)
-	{
-		SelectedIndices.Add(Index);
-	}
-	else
-	{
-		SelectedIndices.Remove(Index);
-	}
-
-	SelectionBaseIndices = SelectedIndices;
-	bIsSelecting = false;
-	bSelectionMoved = false;
-	RefreshSelectionVisuals(OldSelection);
+	// Start a selection gesture on mouse down; this supports both click-select and drag-select.
+	BeginSelection(Coord, Op);
 }
 
 void ULevelDataGridEditorWidget::HandleCellHoveredWhilePressed(FIntPoint Coord)
 {
-	if (!bIsSelecting || !IsCoordValid(Coord))
+	if (!bIsSelecting || !IsViewCoordValid(Coord))
 	{
 		return;
 	}
@@ -530,6 +640,8 @@ void ULevelDataGridEditorWidget::HandleCellHoveredWhilePressed(FIntPoint Coord)
 		SelectionCurrentCoord = Coord;
 		bSelectionMoved = true;
 		UpdateSelectionFromDragRect();
+		UpdateSelectionMarqueeVisual();
+		Invalidate(EInvalidateWidgetReason::Paint);
 	}
 }
 
@@ -558,9 +670,11 @@ void ULevelDataGridEditorWidget::RebuildGrid()
 		EffectiveCellWidgetClass = ULevelGridCellWidget::StaticClass();
 	}
 
-	for (int32 Y = 0; Y < GridHeight; ++Y)
+	const int32 ViewWidth = GetViewWidth();
+	const int32 ViewHeight = GetViewHeight();
+	for (int32 ViewY = 0; ViewY < ViewHeight; ++ViewY)
 	{
-		for (int32 X = 0; X < GridWidth; ++X)
+		for (int32 ViewX = 0; ViewX < ViewWidth; ++ViewX)
 		{
 			ULevelGridCellWidget* CellWidget = CreateWidget<ULevelGridCellWidget>(this, EffectiveCellWidgetClass);
 			if (!CellWidget)
@@ -568,12 +682,18 @@ void ULevelDataGridEditorWidget::RebuildGrid()
 				continue;
 			}
 
-			const FIntPoint Coord(X, Y);
-			const int32 Index = ToIndex(Coord);
+			const FIntPoint ViewCoord(ViewX, ViewY);
+			const FIntPoint DataCoord = ViewToDataCoord(ViewCoord);
+			if (!IsCoordValid(DataCoord))
+			{
+				continue;
+			}
+
+			const int32 Index = ToIndex(DataCoord);
 			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass;
 
 			CellWidget->SetCellVisualSize(CellPixelSize);
-			CellWidget->SetCellData(Coord, CellClass, true);
+			CellWidget->SetCellData(ViewCoord, CellClass, true);
 			if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
 			{
 				CellWidget->SetDisplayStyle(Display->BGColor, Display->Icon);
@@ -586,7 +706,7 @@ void ULevelDataGridEditorWidget::RebuildGrid()
 			CellWidget->OnCellHoveredWhilePressed.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellHoveredWhilePressed);
 			CellWidget->OnCellMouseReleased.AddDynamic(this, &ULevelDataGridEditorWidget::HandleCellMouseReleased);
 
-			if (UUniformGridSlot* GridSlot = GridPanel->AddChildToUniformGrid(CellWidget, Y, X))
+			if (UUniformGridSlot* GridSlot = GridPanel->AddChildToUniformGrid(CellWidget, ViewY, ViewX))
 			{
 				GridSlot->SetHorizontalAlignment(HAlign_Fill);
 				GridSlot->SetVerticalAlignment(VAlign_Fill);
@@ -731,9 +851,38 @@ bool ULevelDataGridEditorWidget::IsCoordValid(const FIntPoint& Coord) const
 	return Coord.X >= 0 && Coord.Y >= 0 && Coord.X < GridWidth && Coord.Y < GridHeight;
 }
 
+bool ULevelDataGridEditorWidget::IsViewCoordValid(const FIntPoint& Coord) const
+{
+	return Coord.X >= 0 && Coord.Y >= 0 && Coord.X < GetViewWidth() && Coord.Y < GetViewHeight();
+}
+
+int32 ULevelDataGridEditorWidget::GetViewWidth() const
+{
+	return GridHeight;
+}
+
+int32 ULevelDataGridEditorWidget::GetViewHeight() const
+{
+	return GridWidth;
+}
+
+FIntPoint ULevelDataGridEditorWidget::ViewToDataCoord(const FIntPoint& ViewCoord) const
+{
+	// 90-degree CCW view rotation.
+	// view(x, y) -> data(W - 1 - y, x)
+	return FIntPoint(GridWidth - 1 - ViewCoord.Y, ViewCoord.X);
+}
+
+FIntPoint ULevelDataGridEditorWidget::DataToViewCoord(const FIntPoint& DataCoord) const
+{
+	// Inverse mapping of ViewToDataCoord.
+	// data(x, y) -> view(y, W - 1 - x)
+	return FIntPoint(DataCoord.Y, GridWidth - 1 - DataCoord.X);
+}
+
 void ULevelDataGridEditorWidget::UpdateContentBaseSize()
 {
-	ContentBaseSize = FVector2D(GridWidth * CellPixelSize, GridHeight * CellPixelSize);
+	ContentBaseSize = FVector2D(GetViewWidth() * CellPixelSize, GetViewHeight() * CellPixelSize);
 }
 
 void ULevelDataGridEditorWidget::SyncCellDisplayList(TArray<FCellDisplay>& InOutCells)
@@ -873,10 +1022,11 @@ void ULevelDataGridEditorWidget::RefreshWidgetAtIndex(int32 Index)
 
 	const int32 X = Index % GridWidth;
 	const int32 Y = Index / GridWidth;
-	const FIntPoint Coord(X, Y);
+	const FIntPoint DataCoord(X, Y);
+	const FIntPoint ViewCoord = DataToViewCoord(DataCoord);
 	const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : DefaultCellClass;
 
-	SpawnedCellWidgets[Index]->SetCellData(Coord, CellClass, true);
+	SpawnedCellWidgets[Index]->SetCellData(ViewCoord, CellClass, true);
 	if (const FCellDisplay* Display = CellDisplayLookup.Find(CellClass))
 	{
 		SpawnedCellWidgets[Index]->SetDisplayStyle(Display->BGColor, Display->Icon);
@@ -898,15 +1048,15 @@ bool ULevelDataGridEditorWidget::TryGetCoordFromPointer(const FGeometry& InGeome
 	const FVector2D Local = InGeometry.AbsoluteToLocal(InScreenPosition);
 	const FVector2D ContentLocal = (Local - PanOffset) / FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
 
-	const int32 X = FMath::FloorToInt(ContentLocal.X / FMath::Max(CellPixelSize, 1.0f));
-	const int32 Y = FMath::FloorToInt(ContentLocal.Y / FMath::Max(CellPixelSize, 1.0f));
-	const FIntPoint Coord(X, Y);
-	if (!IsCoordValid(Coord))
+	const int32 ViewX = FMath::FloorToInt(ContentLocal.X / FMath::Max(CellPixelSize, 1.0f));
+	const int32 ViewY = FMath::FloorToInt(ContentLocal.Y / FMath::Max(CellPixelSize, 1.0f));
+	const FIntPoint ViewCoord(ViewX, ViewY);
+	if (!IsViewCoordValid(ViewCoord))
 	{
 		return false;
 	}
 
-	OutCoord = Coord;
+	OutCoord = ViewCoord;
 	return true;
 }
 
@@ -968,7 +1118,14 @@ void ULevelDataGridEditorWidget::BuildRectSelectionSet(const FIntPoint& A, const
 	{
 		for (int32 X = MinX; X <= MaxX; ++X)
 		{
-			const int32 Index = CoordToIndex(FIntPoint(X, Y));
+			const FIntPoint ViewCoord(X, Y);
+			if (!IsViewCoordValid(ViewCoord))
+			{
+				continue;
+			}
+
+			const FIntPoint DataCoord = ViewToDataCoord(ViewCoord);
+			const int32 Index = CoordToIndex(DataCoord);
 			if (Index != INDEX_NONE)
 			{
 				OutSet.Add(Index);
@@ -999,6 +1156,8 @@ void ULevelDataGridEditorWidget::BeginSelection(const FIntPoint& StartCoord, EGr
 	CurrentSelectionOp = Op;
 	SelectionBaseIndices = SelectedIndices;
 	UpdateSelectionFromDragRect();
+	UpdateSelectionMarqueeVisual();
+	Invalidate(EInvalidateWidgetReason::Paint);
 }
 
 void ULevelDataGridEditorWidget::EndSelection(bool bCommitSelection)
@@ -1012,4 +1171,68 @@ void ULevelDataGridEditorWidget::EndSelection(bool bCommitSelection)
 	bIsSelecting = false;
 	bSelectionMoved = false;
 	SelectionBaseIndices = SelectedIndices;
+	UpdateSelectionMarqueeVisual();
+	Invalidate(EInvalidateWidgetReason::Paint);
+}
+
+void ULevelDataGridEditorWidget::EnsureSelectionMarqueeWidget()
+{
+	if (SelectionMarqueeWidget || !GridCanvas || !WidgetTree)
+	{
+		return;
+	}
+
+	SelectionMarqueeWidget = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("SelectionMarquee"));
+	if (!SelectionMarqueeWidget)
+	{
+		return;
+	}
+
+	SelectionMarqueeWidget->SetBrushColor(SelectionMarqueeColor);
+	SelectionMarqueeWidget->SetVisibility(ESlateVisibility::Collapsed);
+
+	if (UCanvasPanelSlot* CanvasSlot = GridCanvas->AddChildToCanvas(SelectionMarqueeWidget))
+	{
+		CanvasSlot->SetAutoSize(false);
+		CanvasSlot->SetZOrder(1000);
+		CanvasSlot->SetAnchors(FAnchors(0.0f, 0.0f, 0.0f, 0.0f));
+		CanvasSlot->SetAlignment(FVector2D::ZeroVector);
+		CanvasSlot->SetPosition(FVector2D::ZeroVector);
+		CanvasSlot->SetSize(FVector2D::ZeroVector);
+	}
+}
+
+void ULevelDataGridEditorWidget::UpdateSelectionMarqueeVisual()
+{
+	if (!SelectionMarqueeWidget)
+	{
+		return;
+	}
+
+	SelectionMarqueeWidget->SetBrushColor(SelectionMarqueeColor);
+	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(SelectionMarqueeWidget->Slot);
+	if (!CanvasSlot)
+	{
+		return;
+	}
+
+	if (!bIsSelecting || (!bSelectionMoved && SelectionStartCoord == SelectionCurrentCoord))
+	{
+		SelectionMarqueeWidget->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	const int32 MinX = FMath::Min(SelectionStartCoord.X, SelectionCurrentCoord.X);
+	const int32 MaxX = FMath::Max(SelectionStartCoord.X, SelectionCurrentCoord.X);
+	const int32 MinY = FMath::Min(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+	const int32 MaxY = FMath::Max(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+
+	const FVector2D Pos(static_cast<float>(MinX) * CellPixelSize, static_cast<float>(MinY) * CellPixelSize);
+	const FVector2D Size(
+		static_cast<float>(MaxX - MinX + 1) * CellPixelSize,
+		static_cast<float>(MaxY - MinY + 1) * CellPixelSize);
+
+	CanvasSlot->SetPosition(Pos);
+	CanvasSlot->SetSize(Size);
+	SelectionMarqueeWidget->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 }

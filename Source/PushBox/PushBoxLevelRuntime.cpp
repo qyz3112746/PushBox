@@ -11,7 +11,6 @@
 #include "PushBoxLevelData.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
-#include "Containers/Queue.h"
 
 APushBoxLevelRuntime::APushBoxLevelRuntime()
 {
@@ -80,16 +79,18 @@ bool APushBoxLevelRuntime::LoadLevel(UPushBoxLevelData* InLevelData)
 		return false;
 	}
 
-	FLevelValidationResult Validation;
-	if (!ValidateLevelData(InLevelData, Validation))
-	{
-		return false;
-	}
-
 	ClearSpawnedLevel();
 	CurrentLevelData = InLevelData;
 	bHasAnnouncedVictory = false;
-	PlayerCoord = Validation.PlayerSpawnCoord;
+	PlayerCoord = FIntPoint::ZeroValue;
+	for (const FPushBoxCellSpawnData& CellDef : InLevelData->CellDefinitions)
+	{
+		if (CellDef.CellClass && CellDef.CellClass->IsChildOf(APlayerSpawnCell::StaticClass()))
+		{
+			PlayerCoord = CellDef.GridCoord;
+			break;
+		}
+	}
 
 	if (InLevelData->DefaultCellClass)
 	{
@@ -323,281 +324,6 @@ ABoxActor* APushBoxLevelRuntime::RegisterSpawnedBox(const FIntPoint& SpawnCoord,
 	BoxByCoord.Add(SpawnCoord, BoxActor);
 	BoxCoordByActor.Add(BoxActor, SpawnCoord);
 	return BoxActor;
-}
-
-bool APushBoxLevelRuntime::ValidateLevelData(const UPushBoxLevelData* InLevelData, FLevelValidationResult& OutValidation) const
-{
-	OutValidation = FLevelValidationResult();
-
-	if (!InLevelData)
-	{
-		UE_LOG(LogPushBox, Error, TEXT("ValidateLevelData failed: LevelData is null."));
-		return false;
-	}
-
-	if (InLevelData->GridWidth <= 0 || InLevelData->GridHeight <= 0)
-	{
-		UE_LOG(LogPushBox, Error, TEXT("Level '%s' has invalid grid size."), *InLevelData->GetName());
-		return false;
-	}
-
-	TSet<FIntPoint> OccupiedCoords;
-	int32 SpawnCount = 0;
-	int32 BoxCount = 0;
-	int32 TargetCount = 0;
-	TMap<UClass*, int32> AvailableBoxCounts;
-	TArray<TArray<UClass*>> TargetRequirements;
-
-	for (const FPushBoxCellSpawnData& CellDef : InLevelData->CellDefinitions)
-	{
-		if (!CellDef.CellClass)
-		{
-			UE_LOG(LogPushBox, Error, TEXT("Level '%s' has an empty CellClass in CellDefinitions."), *InLevelData->GetName());
-			return false;
-		}
-
-		if (CellDef.GridCoord.X < 0 || CellDef.GridCoord.X >= InLevelData->GridWidth ||
-			CellDef.GridCoord.Y < 0 || CellDef.GridCoord.Y >= InLevelData->GridHeight)
-		{
-			UE_LOG(LogPushBox, Error, TEXT("Cell (%d, %d) is out of bounds in level '%s'."),
-				CellDef.GridCoord.X, CellDef.GridCoord.Y, *InLevelData->GetName());
-			return false;
-		}
-
-		if (OccupiedCoords.Contains(CellDef.GridCoord))
-		{
-			UE_LOG(LogPushBox, Error, TEXT("Duplicate cell definition at (%d, %d) in level '%s'."),
-				CellDef.GridCoord.X, CellDef.GridCoord.Y, *InLevelData->GetName());
-			return false;
-		}
-		OccupiedCoords.Add(CellDef.GridCoord);
-
-		if (CellDef.CellClass->IsChildOf(APlayerSpawnCell::StaticClass()))
-		{
-			++SpawnCount;
-			OutValidation.PlayerSpawnCoord = CellDef.GridCoord;
-			continue;
-		}
-
-		if (CellDef.CellClass->IsChildOf(ABoxTargetCell::StaticClass()))
-		{
-			++TargetCount;
-			const TSubclassOf<ABoxTargetCell> TargetClass = CellDef.CellClass.Get();
-			OutValidation.TargetCountsByType.FindOrAdd(TargetClass)++;
-
-			const ABoxTargetCell* TargetCDO = Cast<ABoxTargetCell>(CellDef.CellClass->GetDefaultObject());
-			if (!TargetCDO || TargetCDO->RequiredBoxActorTypes.Num() == 0)
-			{
-				UE_LOG(LogPushBox, Error, TEXT("Target cell class '%s' must define RequiredBoxActorTypes."), *CellDef.CellClass->GetName());
-				return false;
-			}
-
-			TArray<UClass*> RequiredTypes;
-			for (const TSubclassOf<ABoxActor>& RequiredType : TargetCDO->RequiredBoxActorTypes)
-			{
-				UClass* RequiredClass = RequiredType.Get();
-				if (!RequiredClass)
-				{
-					UE_LOG(LogPushBox, Error, TEXT("Target cell class '%s' contains an empty required box type."), *CellDef.CellClass->GetName());
-					return false;
-				}
-				RequiredTypes.Add(RequiredClass);
-			}
-			TargetRequirements.Add(MoveTemp(RequiredTypes));
-			continue;
-		}
-
-		if (CellDef.CellClass->IsChildOf(ABoxCell::StaticClass()))
-		{
-			++BoxCount;
-
-			const ABoxCell* BoxCDO = Cast<ABoxCell>(CellDef.CellClass->GetDefaultObject());
-			if (!BoxCDO)
-			{
-				UE_LOG(LogPushBox, Error, TEXT("Invalid box class setup in level '%s'."), *InLevelData->GetName());
-				return false;
-			}
-
-			UClass* SpawnBoxClass = BoxCDO->BoxSpawnClass.Get();
-			if (!SpawnBoxClass)
-			{
-				UE_LOG(LogPushBox, Error, TEXT("Box cell class '%s' must define BoxSpawnClass."), *CellDef.CellClass->GetName());
-				return false;
-			}
-
-			AvailableBoxCounts.FindOrAdd(SpawnBoxClass)++;
-		}
-	}
-
-	if (SpawnCount != 1)
-	{
-		UE_LOG(LogPushBox, Error, TEXT("Level '%s' must contain exactly one PlayerSpawnCell (found %d)."),
-			*InLevelData->GetName(), SpawnCount);
-		return false;
-	}
-
-	if (BoxCount < TargetCount)
-	{
-		UE_LOG(LogPushBox, Error, TEXT("Level '%s' must contain enough boxes for all targets (boxes=%d, targets=%d)."),
-			*InLevelData->GetName(), BoxCount, TargetCount);
-		return false;
-	}
-
-	// Build a small max-flow (target instances -> box classes with supply) to avoid exponential backtracking.
-	TMap<UClass*, int32> ClassToIndex;
-	TArray<UClass*> IndexedClasses;
-	TArray<int32> ClassSupply;
-	for (const TPair<UClass*, int32>& Pair : AvailableBoxCounts)
-	{
-		const int32 NewIndex = IndexedClasses.Add(Pair.Key);
-		ClassToIndex.Add(Pair.Key, NewIndex);
-		ClassSupply.Add(Pair.Value);
-	}
-
-	for (const TArray<UClass*>& RequiredTypes : TargetRequirements)
-	{
-		bool bHasAnyAvailableType = false;
-		for (UClass* RequiredType : RequiredTypes)
-		{
-			if (const int32* ClassIndex = ClassToIndex.Find(RequiredType))
-			{
-				if (ClassSupply[*ClassIndex] > 0)
-				{
-					bHasAnyAvailableType = true;
-					break;
-				}
-			}
-		}
-		if (!bHasAnyAvailableType)
-		{
-			UE_LOG(LogPushBox, Error, TEXT("Level '%s' has a target requiring unavailable box classes."), *InLevelData->GetName());
-			return false;
-		}
-	}
-
-	struct FFlowEdge
-	{
-		int32 To = 0;
-		int32 Rev = 0;
-		int32 Cap = 0;
-	};
-
-	auto AddEdge = [](TArray<TArray<FFlowEdge>>& Graph, int32 From, int32 To, int32 Cap)
-	{
-		const int32 FwdIndex = Graph[From].Num();
-		const int32 RevIndex = Graph[To].Num();
-		Graph[From].Add({To, RevIndex, Cap});
-		Graph[To].Add({From, FwdIndex, 0});
-	};
-
-	const int32 TargetNodeOffset = 1;
-	const int32 ClassNodeOffset = TargetNodeOffset + TargetRequirements.Num();
-	const int32 SinkNode = ClassNodeOffset + IndexedClasses.Num();
-	const int32 NodeCount = SinkNode + 1;
-	TArray<TArray<FFlowEdge>> Graph;
-	Graph.SetNum(NodeCount);
-
-	for (int32 TargetIdx = 0; TargetIdx < TargetRequirements.Num(); ++TargetIdx)
-	{
-		const int32 TargetNode = TargetNodeOffset + TargetIdx;
-		AddEdge(Graph, 0, TargetNode, 1);
-
-		for (UClass* RequiredType : TargetRequirements[TargetIdx])
-		{
-			const int32* ClassIndex = ClassToIndex.Find(RequiredType);
-			if (!ClassIndex)
-			{
-				continue;
-			}
-
-			const int32 ClassNode = ClassNodeOffset + *ClassIndex;
-			AddEdge(Graph, TargetNode, ClassNode, 1);
-		}
-	}
-
-	for (int32 ClassIdx = 0; ClassIdx < ClassSupply.Num(); ++ClassIdx)
-	{
-		const int32 ClassNode = ClassNodeOffset + ClassIdx;
-		AddEdge(Graph, ClassNode, SinkNode, ClassSupply[ClassIdx]);
-	}
-
-	auto BuildLevelGraph = [](const TArray<TArray<FFlowEdge>>& GraphRef, int32 Source, TArray<int32>& OutLevel) -> bool
-	{
-		OutLevel.Init(-1, GraphRef.Num());
-		TQueue<int32> Queue;
-		OutLevel[Source] = 0;
-		Queue.Enqueue(Source);
-
-		while (!Queue.IsEmpty())
-		{
-			int32 Node = 0;
-			Queue.Dequeue(Node);
-			for (const FFlowEdge& Edge : GraphRef[Node])
-			{
-				if (Edge.Cap > 0 && OutLevel[Edge.To] < 0)
-				{
-					OutLevel[Edge.To] = OutLevel[Node] + 1;
-					Queue.Enqueue(Edge.To);
-				}
-			}
-		}
-
-		return OutLevel.Last() >= 0;
-	};
-
-	TFunction<int32(int32, int32, TArray<int32>&, const TArray<int32>&)> SendFlow;
-	SendFlow = [&](int32 Node, int32 Flow, TArray<int32>& It, const TArray<int32>& Level) -> int32
-	{
-		if (Node == SinkNode)
-		{
-			return Flow;
-		}
-
-		for (; It[Node] < Graph[Node].Num(); ++It[Node])
-		{
-			FFlowEdge& Edge = Graph[Node][It[Node]];
-			if (Edge.Cap <= 0 || Level[Edge.To] != Level[Node] + 1)
-			{
-				continue;
-			}
-
-			const int32 Pushed = SendFlow(Edge.To, FMath::Min(Flow, Edge.Cap), It, Level);
-			if (Pushed > 0)
-			{
-				Edge.Cap -= Pushed;
-				Graph[Edge.To][Edge.Rev].Cap += Pushed;
-				return Pushed;
-			}
-		}
-
-		return 0;
-	};
-
-	int32 MaxFlow = 0;
-	TArray<int32> Level;
-	while (BuildLevelGraph(Graph, 0, Level))
-	{
-		TArray<int32> It;
-		It.Init(0, Graph.Num());
-		while (true)
-		{
-			const int32 Pushed = SendFlow(0, TNumericLimits<int32>::Max(), It, Level);
-			if (Pushed <= 0)
-			{
-				break;
-			}
-			MaxFlow += Pushed;
-		}
-	}
-
-	if (MaxFlow < TargetRequirements.Num())
-	{
-		UE_LOG(LogPushBox, Error, TEXT("Level '%s' does not have enough strict-matching box classes to satisfy all targets."), *InLevelData->GetName());
-		return false;
-	}
-
-	OutValidation.bIsValid = true;
-	return true;
 }
 
 void APushBoxLevelRuntime::ClearSpawnedLevel()
