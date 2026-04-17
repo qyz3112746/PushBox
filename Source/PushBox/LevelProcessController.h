@@ -8,9 +8,13 @@
 
 class UPushBoxLevelData;
 class APushBoxLevelRuntime;
+class ALevelProcessController;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FPushBoxPendingTransitionSignature, bool, bLevelPassed, int32, CurrentIndex, FName, CurrentLevelId);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FPushBoxFlowCompletedSignature);
 
 UCLASS(Blueprintable)
-class ALevelProcessController : public AActor
+class PUSHBOX_API ALevelProcessController : public AActor
 {
 	GENERATED_BODY()
 
@@ -20,11 +24,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow")
 	UPushBoxLevelData* DefaultLevelData;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow")
+	TArray<TObjectPtr<UPushBoxLevelData>> LevelSequence;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow")
+	bool bAutoStartOnBeginPlay;
+
+	UPROPERTY(BlueprintAssignable, Category = "PushBox|Flow")
+	FPushBoxPendingTransitionSignature OnPendingTransitionStarted;
+
+	UPROPERTY(BlueprintAssignable, Category = "PushBox|Flow")
+	FPushBoxFlowCompletedSignature OnFlowCompleted;
+
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "PushBox|Flow")
 	UPushBoxLevelData* GetInitialLevelData();
 	virtual UPushBoxLevelData* GetInitialLevelData_Implementation();
 
-	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "PushBox|Flow")
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "PushBox|Flow", meta = (DeprecatedFunction, DeprecationMessage = "Use LevelSequence and ConfirmAdvanceToNextLevel flow."))
 	UPushBoxLevelData* DecideNextLevelData(bool bLevelPassed, FName CurrentLevelId);
 	virtual UPushBoxLevelData* DecideNextLevelData_Implementation(bool bLevelPassed, FName CurrentLevelId);
 
@@ -32,7 +48,35 @@ public:
 	bool LoadLevelData(UPushBoxLevelData* LevelData);
 
 	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
+	bool LoadLevelByIndex(int32 LevelIndex);
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
 	bool RestartCurrentLevel();
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
+	bool ConfirmAdvanceToNextLevel();
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
+	bool ConfirmRestartCurrentLevel();
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
+	void CancelPendingTransition();
+
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "PushBox|Flow")
+	ALevelProcessController* ResolveNextProcessController();
+	virtual ALevelProcessController* ResolveNextProcessController_Implementation();
+
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Flow")
+	void ConfigureFlowLevelSequence(const TArray<UPushBoxLevelData*>& InLevelSequence);
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	int32 GetCurrentLevelIndex() const { return CurrentLevelIndex; }
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	UPushBoxLevelData* GetCurrentLevelData() const;
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	bool IsPendingTransition() const { return bPendingTransition; }
 
 	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
 	APushBoxLevelRuntime* GetLevelRuntime() const { return LevelRuntime; }
@@ -52,9 +96,22 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "PushBox|Flow")
 	TObjectPtr<APushBoxLevelRuntime> LevelRuntime;
 
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "PushBox|Flow")
+	int32 CurrentLevelIndex;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "PushBox|Flow")
+	bool bPendingTransition;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "PushBox|Flow")
+	bool bPendingResultPassed;
+
 private:
 	UFUNCTION()
 	void HandleLevelFinished(bool bLevelPassed);
+
+	UPushBoxLevelData* ResolveInitialLevelData(int32& OutInitialIndex);
+	void ClearPendingTransition();
+	int32 FindIndexInSequence(const UPushBoxLevelData* LevelData) const;
 
 	bool EnsureLevelRuntime();
 	void SyncRuntimeOrigin() const;

@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PushBoxPlayerController.h"
+#include "PushBoxFlowDirector.h"
 #include "LevelProcessController.h"
 #include "PushBoxLevelRuntime.h"
 #include "Engine/World.h"
@@ -14,6 +15,7 @@ APushBoxPlayerController::APushBoxPlayerController()
 {
 	bShowMouseCursor = true;
 	DefaultMouseCursor = EMouseCursor::Default;
+	CachedFlowDirector = nullptr;
 	CachedProcessController = nullptr;
 	CachedLevelRuntime = nullptr;
 }
@@ -80,6 +82,12 @@ void APushBoxPlayerController::RestartLevel()
 
 bool APushBoxPlayerController::TryMove(const FIntPoint& Direction)
 {
+	const ALevelProcessController* ProcessController = ResolveProcessController();
+	if (ProcessController && ProcessController->IsPendingTransition())
+	{
+		return false;
+	}
+
 	APushBoxLevelRuntime* LevelRuntime = ResolveLevelRuntime();
 	return LevelRuntime ? LevelRuntime->TryMove(Direction) : false;
 }
@@ -126,6 +134,15 @@ FIntPoint APushBoxPlayerController::ToCardinalGridDirection(const FVector& World
 
 ALevelProcessController* APushBoxPlayerController::ResolveProcessController() const
 {
+	if (APushBoxFlowDirector* FlowDirector = ResolveFlowDirector())
+	{
+		if (ALevelProcessController* ActiveController = FlowDirector->GetActiveProcessController())
+		{
+			CachedProcessController = ActiveController;
+			return ActiveController;
+		}
+	}
+
 	if (CachedProcessController)
 	{
 		return CachedProcessController;
@@ -133,4 +150,15 @@ ALevelProcessController* APushBoxPlayerController::ResolveProcessController() co
 
 	CachedProcessController = GetWorld() ? Cast<ALevelProcessController>(UGameplayStatics::GetActorOfClass(GetWorld(), ALevelProcessController::StaticClass())) : nullptr;
 	return CachedProcessController;
+}
+
+APushBoxFlowDirector* APushBoxPlayerController::ResolveFlowDirector() const
+{
+	if (CachedFlowDirector)
+	{
+		return CachedFlowDirector;
+	}
+
+	CachedFlowDirector = GetWorld() ? Cast<APushBoxFlowDirector>(UGameplayStatics::GetActorOfClass(GetWorld(), APushBoxFlowDirector::StaticClass())) : nullptr;
+	return CachedFlowDirector;
 }

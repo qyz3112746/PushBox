@@ -8,6 +8,7 @@
 
 class APushBoxLevelRuntime;
 class ALevelProcessController;
+class APushBoxFlowDirector;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogPushBoxController, Log, All);
 
@@ -34,9 +35,11 @@ private:
 	static FIntPoint ToCardinalGridDirection(const FVector& WorldDirection);
 
 	bool TryMove(const FIntPoint& Direction);
+	APushBoxFlowDirector* ResolveFlowDirector() const;
 	ALevelProcessController* ResolveProcessController() const;
 	APushBoxLevelRuntime* ResolveLevelRuntime() const;
 
+	mutable TObjectPtr<APushBoxFlowDirector> CachedFlowDirector;
 	mutable TObjectPtr<ALevelProcessController> CachedProcessController;
 	mutable TObjectPtr<APushBoxLevelRuntime> CachedLevelRuntime;
 };

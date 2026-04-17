@@ -81,42 +81,40 @@ bool APushBoxLevelRuntime::LoadLevel(UPushBoxLevelData* InLevelData)
 
 	ClearSpawnedLevel();
 	CurrentLevelData = InLevelData;
+	CurrentLevelData->NormalizeGrid(CurrentLevelData->DefaultCellClass);
 	bHasAnnouncedVictory = false;
 	PlayerCoord = FIntPoint::ZeroValue;
-	for (const FPushBoxCellSpawnData& CellDef : InLevelData->CellDefinitions)
-	{
-		if (CellDef.CellClass && CellDef.CellClass->IsChildOf(APlayerSpawnCell::StaticClass()))
-		{
-			PlayerCoord = CellDef.GridCoord;
-			break;
-		}
-	}
-
-	if (InLevelData->DefaultCellClass)
+	bool bFoundPlayerSpawn = false;
+	for (int32 Y = 0; Y < InLevelData->GridHeight; ++Y)
 	{
 		for (int32 X = 0; X < InLevelData->GridWidth; ++X)
 		{
-			for (int32 Y = 0; Y < InLevelData->GridHeight; ++Y)
+			const FIntPoint GridCoord(X, Y);
+			TSubclassOf<AGridCellBase> CellClass = InLevelData->GetCellAt(GridCoord);
+			if (!CellClass)
 			{
-				SpawnCell(InLevelData->DefaultCellClass, FIntPoint(X, Y));
+				CellClass = InLevelData->DefaultCellClass;
 			}
-		}
-	}
 
-	for (const FPushBoxCellSpawnData& CellDef : InLevelData->CellDefinitions)
-	{
-		if (AGridCellBase* ExistingCell = FindSpawnedCellAt(CellDef.GridCoord))
-		{
-			UnregisterSpawnedCell(ExistingCell);
-			ExistingCell->Destroy();
-		}
+			if (!CellClass)
+			{
+				UE_LOG(LogPushBox, Warning, TEXT("Skip empty cell at (%d, %d): both GridRows and DefaultCellClass are null."), GridCoord.X, GridCoord.Y);
+				continue;
+			}
 
-		if (!SpawnCell(CellDef.CellClass, CellDef.GridCoord))
-		{
-			UE_LOG(LogPushBox, Error, TEXT("Failed to spawn cell at (%d, %d)."), CellDef.GridCoord.X, CellDef.GridCoord.Y);
-			ClearSpawnedLevel();
-			CurrentLevelData = nullptr;
-			return false;
+			if (!bFoundPlayerSpawn && CellClass->IsChildOf(APlayerSpawnCell::StaticClass()))
+			{
+				PlayerCoord = GridCoord;
+				bFoundPlayerSpawn = true;
+			}
+
+			if (!SpawnCell(CellClass, GridCoord))
+			{
+				UE_LOG(LogPushBox, Error, TEXT("Failed to spawn cell at (%d, %d)."), GridCoord.X, GridCoord.Y);
+				ClearSpawnedLevel();
+				CurrentLevelData = nullptr;
+				return false;
+			}
 		}
 	}
 

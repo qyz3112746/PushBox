@@ -188,7 +188,7 @@ bool ULevelDataGridEditorWidget::WriteBackToLevelData()
 	EditingLevelData->GridWidth = TemporaryLevelData->GridWidth;
 	EditingLevelData->GridHeight = TemporaryLevelData->GridHeight;
 	EditingLevelData->DefaultCellClass = TemporaryLevelData->DefaultCellClass;
-	EditingLevelData->CellDefinitions = TemporaryLevelData->CellDefinitions;
+	EditingLevelData->GridRows = TemporaryLevelData->GridRows;
 
 	return true;
 }
@@ -954,7 +954,7 @@ void ULevelDataGridEditorWidget::SyncTemporaryLevelDataFromResolved()
 	TemporaryLevelData->GridWidth = FMath::Max(1, GridWidth);
 	TemporaryLevelData->GridHeight = FMath::Max(1, GridHeight);
 	TemporaryLevelData->DefaultCellClass = DefaultCellClass;
-	TemporaryLevelData->CellDefinitions.Reset();
+	TemporaryLevelData->InitializeGrid(GridWidth, GridHeight, DefaultCellClass);
 
 	for (int32 Y = 0; Y < GridHeight; ++Y)
 	{
@@ -962,15 +962,7 @@ void ULevelDataGridEditorWidget::SyncTemporaryLevelDataFromResolved()
 		{
 			const int32 Index = ToIndex(FIntPoint(X, Y));
 			const TSubclassOf<AGridCellBase> CellClass = ResolvedCells.IsValidIndex(Index) ? ResolvedCells[Index] : nullptr;
-			if (CellClass == DefaultCellClass)
-			{
-				continue;
-			}
-
-			FPushBoxCellSpawnData NewDef;
-			NewDef.GridCoord = FIntPoint(X, Y);
-			NewDef.CellClass = CellClass;
-			TemporaryLevelData->CellDefinitions.Add(NewDef);
+			TemporaryLevelData->SetCellAt(FIntPoint(X, Y), CellClass);
 		}
 	}
 }
@@ -998,17 +990,23 @@ void ULevelDataGridEditorWidget::BuildResolvedCellsFromLevelData(
 		return;
 	}
 
-	for (const FPushBoxCellSpawnData& Def : SourceData->CellDefinitions)
+	for (int32 Y = 0; Y < OutGridHeight; ++Y)
 	{
-		if (Def.GridCoord.X < 0 || Def.GridCoord.X >= OutGridWidth || Def.GridCoord.Y < 0 || Def.GridCoord.Y >= OutGridHeight)
+		for (int32 X = 0; X < OutGridWidth; ++X)
 		{
-			continue;
-		}
+			const FIntPoint Coord(X, Y);
+			const int32 Index = Coord.Y * OutGridWidth + Coord.X;
+			if (!OutResolvedCells.IsValidIndex(Index))
+			{
+				continue;
+			}
 
-		const int32 Index = Def.GridCoord.Y * OutGridWidth + Def.GridCoord.X;
-		if (OutResolvedCells.IsValidIndex(Index))
-		{
-			OutResolvedCells[Index] = Def.CellClass;
+			TSubclassOf<AGridCellBase> CellClass = SourceData->GetCellAt(Coord);
+			if (!CellClass)
+			{
+				CellClass = OutDefaultCellClass;
+			}
+			OutResolvedCells[Index] = CellClass;
 		}
 	}
 }

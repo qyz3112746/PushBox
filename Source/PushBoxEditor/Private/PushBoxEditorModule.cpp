@@ -3,6 +3,8 @@
 #include "PushBoxEditorModule.h"
 
 #include "CellDisplayCustomization.h"
+#include "PushBoxFlowDataAsset.h"
+#include "PushBoxFlowNodeCustomization.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 
@@ -12,6 +14,9 @@ void FPushBoxEditorModule::StartupModule()
 	PropertyEditorModule.RegisterCustomPropertyTypeLayout(
 		"CellDisplay",
 		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FCellDisplayCustomization::MakeInstance));
+	PropertyEditorModule.RegisterCustomPropertyTypeLayout(
+		FPushBoxFlowNode::StaticStruct()->GetFName(),
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FPushBoxFlowNodeCustomization::MakeInstance));
 	PropertyEditorModule.NotifyCustomizationModuleChanged();
 }
 
@@ -21,6 +26,7 @@ void FPushBoxEditorModule::ShutdownModule()
 	{
 		FPropertyEditorModule& PropertyEditorModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		PropertyEditorModule.UnregisterCustomPropertyTypeLayout("CellDisplay");
+		PropertyEditorModule.UnregisterCustomPropertyTypeLayout(FPushBoxFlowNode::StaticStruct()->GetFName());
 		PropertyEditorModule.NotifyCustomizationModuleChanged();
 	}
 }
