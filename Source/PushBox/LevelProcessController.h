@@ -10,6 +10,15 @@ class UPushBoxLevelData;
 class APushBoxLevelRuntime;
 class ALevelProcessController;
 
+USTRUCT(BlueprintType)
+struct FPushBoxLevelSequenceEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PushBox|Flow")
+	TObjectPtr<UPushBoxLevelData> LevelData = nullptr;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FPushBoxPendingTransitionSignature, bool, bLevelPassed, int32, CurrentIndex, FName, CurrentLevelId);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FPushBoxFlowCompletedSignature);
 
@@ -25,7 +34,7 @@ public:
 	UPushBoxLevelData* DefaultLevelData;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow")
-	TArray<TObjectPtr<UPushBoxLevelData>> LevelSequence;
+	TArray<FPushBoxLevelSequenceEntry> LevelSequence;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow")
 	bool bAutoStartOnBeginPlay;
@@ -81,6 +90,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
 	APushBoxLevelRuntime* GetLevelRuntime() const { return LevelRuntime; }
 
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	float GetConfiguredCellSize() const { return CellSize; }
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	FVector GetConfiguredGridOrigin() const { return GetActorLocation() + LevelOriginOffset; }
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	float GetConfiguredVisualBaseCellSize() const;
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -115,4 +133,5 @@ private:
 
 	bool EnsureLevelRuntime();
 	void SyncRuntimeOrigin() const;
+	void BindRuntimeFinishedCallback();
 };

@@ -94,11 +94,6 @@ bool APushBoxPlayerController::TryMove(const FIntPoint& Direction)
 
 APushBoxLevelRuntime* APushBoxPlayerController::ResolveLevelRuntime() const
 {
-	if (CachedLevelRuntime)
-	{
-		return CachedLevelRuntime;
-	}
-
 	const ALevelProcessController* ProcessController = ResolveProcessController();
 	CachedLevelRuntime = ProcessController ? ProcessController->GetLevelRuntime() : nullptr;
 	return CachedLevelRuntime;

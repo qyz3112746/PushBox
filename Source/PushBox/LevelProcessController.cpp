@@ -41,7 +41,7 @@ void ALevelProcessController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (!EnsureLevelRuntime())
+	if (UGameplayStatics::GetActorOfClass(GetWorld(), APushBoxFlowDirector::StaticClass()))
 	{
 		return;
 	}
@@ -51,7 +51,7 @@ void ALevelProcessController::BeginPlay()
 		return;
 	}
 
-	if (UGameplayStatics::GetActorOfClass(GetWorld(), APushBoxFlowDirector::StaticClass()))
+	if (!EnsureLevelRuntime())
 	{
 		return;
 	}
@@ -88,6 +88,8 @@ bool ALevelProcessController::LoadLevelData(UPushBoxLevelData* LevelData)
 	}
 
 	SyncRuntimeOrigin();
+	BindRuntimeFinishedCallback();
+	LevelRuntime->SetActiveProcessController(this);
 	const bool bLoaded = LevelRuntime->LoadLevel(LevelData);
 	if (bLoaded)
 	{
@@ -105,7 +107,7 @@ bool ALevelProcessController::LoadLevelByIndex(int32 LevelIndex)
 		return false;
 	}
 
-	UPushBoxLevelData* LevelData = LevelSequence[LevelIndex];
+	UPushBoxLevelData* LevelData = LevelSequence[LevelIndex].LevelData;
 	if (!LevelData)
 	{
 		UE_LOG(LogPushBox, Error, TEXT("LevelProcessController::LoadLevelByIndex failed: LevelSequence[%d] is null."), LevelIndex);
@@ -129,6 +131,8 @@ bool ALevelProcessController::RestartCurrentLevel()
 	}
 
 	SyncRuntimeOrigin();
+	BindRuntimeFinishedCallback();
+	LevelRuntime->SetActiveProcessController(this);
 	const bool bRestarted = LevelRuntime->ResetToInitialState();
 	if (bRestarted)
 	{
@@ -139,9 +143,12 @@ bool ALevelProcessController::RestartCurrentLevel()
 
 bool ALevelProcessController::ConfirmAdvanceToNextLevel()
 {
-	if (!LevelRuntime)
+	if (APushBoxFlowDirector* FlowDirector = GetWorld() ? Cast<APushBoxFlowDirector>(UGameplayStatics::GetActorOfClass(GetWorld(), APushBoxFlowDirector::StaticClass())) : nullptr)
 	{
-		return false;
+		if (FlowDirector->GetActiveProcessController() == this)
+		{
+			return FlowDirector->ConfirmAdvance();
+		}
 	}
 
 	if (CurrentLevelIndex != INDEX_NONE)
@@ -160,6 +167,14 @@ bool ALevelProcessController::ConfirmAdvanceToNextLevel()
 
 bool ALevelProcessController::ConfirmRestartCurrentLevel()
 {
+	if (APushBoxFlowDirector* FlowDirector = GetWorld() ? Cast<APushBoxFlowDirector>(UGameplayStatics::GetActorOfClass(GetWorld(), APushBoxFlowDirector::StaticClass())) : nullptr)
+	{
+		if (FlowDirector->GetActiveProcessController() == this)
+		{
+			return FlowDirector->ConfirmReplayCurrent();
+		}
+	}
+
 	return RestartCurrentLevel();
 }
 
@@ -176,6 +191,11 @@ UPushBoxLevelData* ALevelProcessController::GetCurrentLevelData() const
 void ALevelProcessController::HandleLevelFinished(bool bLevelPassed)
 {
 	if (!LevelRuntime)
+	{
+		return;
+	}
+
+	if (LevelRuntime->GetActiveProcessController() != this)
 	{
 		return;
 	}
@@ -206,7 +226,6 @@ bool ALevelProcessController::EnsureLevelRuntime()
 	if (LevelRuntime)
 	{
 		LevelRuntime->OnLevelFinished.RemoveAll(this);
-		LevelRuntime->OnLevelFinished.AddUObject(this, &ALevelProcessController::HandleLevelFinished);
 	}
 
 	return LevelRuntime != nullptr;
@@ -231,10 +250,10 @@ UPushBoxLevelData* ALevelProcessController::ResolveInitialLevelData(int32& OutIn
 
 	if (LevelSequence.Num() > 0)
 	{
-		if (LevelSequence[0])
+		if (LevelSequence[0].LevelData)
 		{
 			OutInitialIndex = 0;
-			return LevelSequence[0];
+			return LevelSequence[0].LevelData;
 		}
 	}
 
@@ -254,9 +273,9 @@ int32 ALevelProcessController::FindIndexInSequence(const UPushBoxLevelData* Leve
 		return INDEX_NONE;
 	}
 
-	return LevelSequence.IndexOfByPredicate([LevelData](const TObjectPtr<UPushBoxLevelData>& Item)
+	return LevelSequence.IndexOfByPredicate([LevelData](const FPushBoxLevelSequenceEntry& Item)
 	{
-		return Item.Get() == LevelData;
+		return Item.LevelData == LevelData;
 	});
 }
 
@@ -266,6 +285,38 @@ void ALevelProcessController::ConfigureFlowLevelSequence(const TArray<UPushBoxLe
 	LevelSequence.Reserve(InLevelSequence.Num());
 	for (UPushBoxLevelData* LevelData : InLevelSequence)
 	{
-		LevelSequence.Add(LevelData);
+		FPushBoxLevelSequenceEntry Entry;
+		Entry.LevelData = LevelData;
+		LevelSequence.Add(Entry);
 	}
+}
+
+float ALevelProcessController::GetConfiguredVisualBaseCellSize() const
+{
+	TSubclassOf<APushBoxLevelRuntime> RuntimeClass = LevelRuntimeClass;
+	if (!RuntimeClass)
+	{
+		RuntimeClass = APushBoxLevelRuntime::StaticClass();
+	}
+	const APushBoxLevelRuntime* RuntimeCDO = RuntimeClass ? RuntimeClass->GetDefaultObject<APushBoxLevelRuntime>() : nullptr;
+	return RuntimeCDO ? RuntimeCDO->VisualBaseCellSize : 100.0f;
+}
+
+void ALevelProcessController::BindRuntimeFinishedCallback()
+{
+	if (!LevelRuntime)
+	{
+		return;
+	}
+
+	if (ALevelProcessController* PreviousOwner = LevelRuntime->GetActiveProcessController())
+	{
+		if (PreviousOwner != this)
+		{
+			LevelRuntime->OnLevelFinished.RemoveAll(PreviousOwner);
+		}
+	}
+
+	LevelRuntime->OnLevelFinished.RemoveAll(this);
+	LevelRuntime->OnLevelFinished.AddUObject(this, &ALevelProcessController::HandleLevelFinished);
 }

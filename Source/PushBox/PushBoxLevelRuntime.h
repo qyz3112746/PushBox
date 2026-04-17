@@ -10,6 +10,7 @@ class ABoxActor;
 class ABoxCell;
 class ABoxTargetCell;
 class AGridCellBase;
+class ALevelProcessController;
 class UPushBoxLevelData;
 enum class ECellMoverType : uint8;
 struct FCellMoveContext;
@@ -63,12 +64,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PushBox|Runtime")
 	FName GetCurrentLevelId() const;
 
+	UFUNCTION(BlueprintCallable, Category = "PushBox|Runtime")
+	void SetActiveProcessController(ALevelProcessController* InController);
+
+	UFUNCTION(BlueprintPure, Category = "PushBox|Runtime")
+	ALevelProcessController* GetActiveProcessController() const { return ActiveProcessController.Get(); }
+
 protected:
 	virtual void BeginPlay() override;
 
 private:
 	UPROPERTY(Transient)
 	UPushBoxLevelData* CurrentLevelData;
+
+	TWeakObjectPtr<ALevelProcessController> ActiveProcessController;
 
 	TArray<TObjectPtr<AGridCellBase>> SpawnedCells;
 	TMap<FIntPoint, TObjectPtr<ABoxActor>> BoxByCoord;

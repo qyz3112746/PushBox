@@ -9,6 +9,7 @@
 #include "PlayerSpawnCell.h"
 #include "PushBox.h"
 #include "PushBoxLevelData.h"
+#include "LevelProcessController.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -21,6 +22,7 @@ APushBoxLevelRuntime::APushBoxLevelRuntime()
 	InputInterval = 0.1f;
 	MoveDuration = 0.1f;
 	CurrentLevelData = nullptr;
+	ActiveProcessController = nullptr;
 	PlayerCoord = FIntPoint::ZeroValue;
 	bHasAnnouncedVictory = false;
 	NextMoveAllowedTime = 0.0;
@@ -278,6 +280,11 @@ bool APushBoxLevelRuntime::ResetToInitialState()
 FName APushBoxLevelRuntime::GetCurrentLevelId() const
 {
 	return CurrentLevelData ? CurrentLevelData->LevelId : NAME_None;
+}
+
+void APushBoxLevelRuntime::SetActiveProcessController(ALevelProcessController* InController)
+{
+	ActiveProcessController = InController;
 }
 
 ABoxActor* APushBoxLevelRuntime::RegisterSpawnedBox(const FIntPoint& SpawnCoord, TSubclassOf<ABoxActor> BoxClass, const FIntPoint& TargetCoord)

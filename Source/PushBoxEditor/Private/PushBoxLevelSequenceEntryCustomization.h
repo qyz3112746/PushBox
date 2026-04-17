@@ -4,12 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "IPropertyTypeCustomization.h"
+#include "Input/Reply.h"
 
 class ALevelProcessController;
 class IPropertyHandle;
-class IPropertyUtilities;
 
-class FPushBoxFlowNodeCustomization : public IPropertyTypeCustomization
+class FPushBoxLevelSequenceEntryCustomization : public IPropertyTypeCustomization
 {
 public:
 	static TSharedRef<IPropertyTypeCustomization> MakeInstance();
@@ -18,11 +18,12 @@ public:
 	virtual void CustomizeChildren(TSharedRef<IPropertyHandle> StructPropertyHandle, IDetailChildrenBuilder& StructBuilder, IPropertyTypeCustomizationUtils& StructCustomizationUtils) override;
 
 private:
-	void HandleProcessControllerChanged();
-	ALevelProcessController* ResolveProcessController() const;
+	FReply HandlePreviewClicked() const;
+	ALevelProcessController* ResolveOwnerProcessController() const;
+	int32 ResolveSequenceIndex() const;
 
+private:
 	TSharedPtr<IPropertyHandle> RootHandle;
-	TSharedPtr<IPropertyHandle> NodeIdHandle;
-	TSharedPtr<IPropertyHandle> ProcessControllerHandle;
-	TWeakPtr<IPropertyUtilities> PropertyUtilities;
+	TSharedPtr<IPropertyHandle> LevelDataHandle;
 };
+

@@ -62,6 +62,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
 	int32 GetCurrentLevelIndexInNode() const { return CurrentLevelIndexInNode; }
 
+	UFUNCTION(BlueprintPure, Category = "PushBox|Flow")
+	UPushBoxFlowDataAsset* GetFlowDataAsset() const { return FlowDataAsset; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -73,6 +76,7 @@ private:
 	int32 CurrentLevelIndexInNode;
 
 	bool ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexInNode);
+	ALevelProcessController* ResolveNodeController(const struct FPushBoxFlowNode& Node) const;
 	void BindActiveController(ALevelProcessController* Controller);
 	UFUNCTION()
 	void HandleActiveControllerFlowCompleted();

@@ -5,6 +5,9 @@
 #include "LevelProcessController.h"
 #include "PushBox.h"
 #include "PushBoxFlowDataAsset.h"
+#include "Engine/Blueprint.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
 
 APushBoxFlowDirector::APushBoxFlowDirector()
 {
@@ -112,10 +115,13 @@ bool APushBoxFlowDirector::ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexIn
 	}
 
 	const FPushBoxFlowNode& Node = FlowDataAsset->Nodes[NodeIndex];
-	ALevelProcessController* Controller = Node.ProcessController.Get();
+	ALevelProcessController* Controller = ResolveNodeController(Node);
 	if (!Controller)
 	{
-		UE_LOG(LogPushBox, Error, TEXT("FlowDirector::ActivateNodeLevel failed: node %d has invalid ProcessController reference."), NodeIndex);
+		UE_LOG(LogPushBox, Error, TEXT("FlowDirector::ActivateNodeLevel failed: node %d could not resolve ProcessController (NodeId=%s, Ref=%s)."),
+			NodeIndex,
+			*Node.NodeId.ToString(),
+			*Node.ProcessController.ToSoftObjectPath().ToString());
 		return false;
 	}
 	Controller->bAutoStartOnBeginPlay = false;
@@ -129,14 +135,13 @@ bool APushBoxFlowDirector::ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexIn
 		return false;
 	}
 
-	BindActiveController(Controller);
-
 	const bool bLoaded = Controller->LoadLevelByIndex(LevelIndexInNode);
 	if (!bLoaded)
 	{
 		return false;
 	}
 
+	BindActiveController(Controller);
 	CurrentNodeIndex = NodeIndex;
 	CurrentLevelIndexInNode = LevelIndexInNode;
 	return true;
@@ -160,4 +165,104 @@ void APushBoxFlowDirector::BindActiveController(ALevelProcessController* Control
 void APushBoxFlowDirector::HandleActiveControllerFlowCompleted()
 {
 	// Keep the director as the single completion source.
+}
+
+ALevelProcessController* APushBoxFlowDirector::ResolveNodeController(const FPushBoxFlowNode& Node) const
+{
+	// 1) Direct instance reference (best case).
+	if (ALevelProcessController* DirectController = Node.ProcessController.Get())
+	{
+		if (!GetWorld() || DirectController->GetWorld() == GetWorld())
+		{
+			return DirectController;
+		}
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+
+	// 2) NodeId tag fallback.
+	if (!Node.NodeId.IsNone())
+	{
+		for (TActorIterator<ALevelProcessController> It(World); It; ++It)
+		{
+			ALevelProcessController* Candidate = *It;
+			if (!Candidate)
+			{
+				continue;
+			}
+
+			if (Candidate->ActorHasTag(Node.NodeId) || Candidate->GetFName() == Node.NodeId)
+			{
+				return Candidate;
+			}
+		}
+	}
+
+	// 3) Soft reference might be a Blueprint class asset; resolve by class in current world.
+	UClass* DesiredClass = nullptr;
+	const FSoftObjectPath RefPath = Node.ProcessController.ToSoftObjectPath();
+	if (RefPath.IsValid())
+	{
+		if (UObject* RefObject = RefPath.TryLoad())
+		{
+			if (UClass* RefClass = Cast<UClass>(RefObject))
+			{
+				if (RefClass->IsChildOf(ALevelProcessController::StaticClass()))
+				{
+					DesiredClass = RefClass;
+				}
+			}
+			else if (const UBlueprint* RefBlueprint = Cast<UBlueprint>(RefObject))
+			{
+				if (RefBlueprint->GeneratedClass && RefBlueprint->GeneratedClass->IsChildOf(ALevelProcessController::StaticClass()))
+				{
+					DesiredClass = RefBlueprint->GeneratedClass;
+				}
+			}
+		}
+	}
+
+	if (DesiredClass)
+	{
+		TArray<ALevelProcessController*> Matches;
+		for (TActorIterator<ALevelProcessController> It(World); It; ++It)
+		{
+			ALevelProcessController* Candidate = *It;
+			if (!Candidate || !Candidate->IsA(DesiredClass))
+			{
+				continue;
+			}
+
+			if (!Node.NodeId.IsNone() && Candidate->ActorHasTag(Node.NodeId))
+			{
+				return Candidate;
+			}
+
+			Matches.Add(Candidate);
+		}
+
+		if (Matches.Num() > 0)
+		{
+			// If there are multiple same-class controllers and we already have an active one,
+			// prefer switching to a different instance to enable node-to-node transitions.
+			if (Matches.Num() > 1 && ActiveProcessController)
+			{
+				for (ALevelProcessController* Candidate : Matches)
+				{
+					if (Candidate && Candidate != ActiveProcessController)
+					{
+						return Candidate;
+					}
+				}
+			}
+
+			return Matches[0];
+		}
+	}
+
+	return nullptr;
 }

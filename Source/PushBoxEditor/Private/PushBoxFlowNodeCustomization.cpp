@@ -66,6 +66,7 @@ void FPushBoxFlowNodeCustomization::CustomizeChildren(TSharedRef<IPropertyHandle
 
 	TArray<UObject*> ExternalObjects;
 	ExternalObjects.Add(ProcessController);
+	StructBuilder.AddExternalObjectProperty(ExternalObjects, FName(TEXT("CellSize")));
 	StructBuilder.AddExternalObjectProperty(ExternalObjects, GET_MEMBER_NAME_CHECKED(ALevelProcessController, LevelSequence));
 }
 

@@ -11,6 +11,8 @@ class UStaticMeshComponent;
 class UStaticMesh;
 class ABoxActor;
 class APushBoxLevelRuntime;
+class APawn;
+class UPushBoxLevelData;
 
 UENUM(BlueprintType)
 enum class ECellMoverType : uint8
@@ -35,6 +37,36 @@ struct FCellMoveContext
 
 	UPROPERTY(BlueprintReadOnly, Category = "Cell")
 	FIntPoint ToCoord = FIntPoint::ZeroValue;
+};
+
+USTRUCT(BlueprintType)
+struct FCellEditorPreviewContext
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	FVector GridOrigin = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	float CellSize = 100.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	float VisualBaseCellSize = 100.0f;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	FIntPoint GridCoord = FIntPoint::ZeroValue;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	TObjectPtr<UPushBoxLevelData> LevelData = nullptr;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	TSubclassOf<APawn> PreviewPawnClass;
+
+	UPROPERTY(BlueprintReadWrite, Category = "Cell|Preview")
+	TObjectPtr<AActor> PreviewAttachActor = nullptr;
+
+	UPROPERTY(BlueprintReadWrite, Transient, Category = "Cell|Preview")
+	TArray<TObjectPtr<AActor>> SpawnedActors;
 };
 
 UCLASS(Blueprintable, meta = (PrioritizeCategories = "Cell"))
@@ -65,6 +97,16 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Cell|Box")
 	ABoxActor* SpawnBoxAt(TSubclassOf<ABoxActor> BoxClass, const FIntPoint& TargetCoord);
+
+	UFUNCTION(BlueprintNativeEvent, Category = "Cell|Preview")
+	void BuildEditorPreview(FCellEditorPreviewContext& PreviewContext);
+	virtual void BuildEditorPreview_Implementation(FCellEditorPreviewContext& PreviewContext);
+
+	UFUNCTION(BlueprintCallable, Category = "Cell|Preview")
+	ABoxActor* SpawnPreviewBoxAt(FCellEditorPreviewContext& PreviewContext, TSubclassOf<ABoxActor> BoxClass, const FIntPoint& TargetCoord);
+
+	UFUNCTION(BlueprintCallable, Category = "Cell|Preview")
+	APawn* SpawnPreviewPawn(FCellEditorPreviewContext& PreviewContext, TSubclassOf<APawn> PawnClass);
 
 	UFUNCTION(BlueprintNativeEvent, Category = "Cell|Events")
 	bool CanPlayerEnter(const FCellMoveContext& Context) const;

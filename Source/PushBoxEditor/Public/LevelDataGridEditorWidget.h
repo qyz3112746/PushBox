@@ -13,6 +13,9 @@ class UBorder;
 class UUniformGridPanel;
 class ULevelGridCellWidget;
 class AGridCellBase;
+class UPushBoxLevelData;
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLevelDataAssetSaved, UPushBoxLevelData*, SavedLevelDataAsset);
 
 UENUM()
 enum class EGridSelectionOp : uint8
@@ -57,6 +60,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "LevelEditor|Data")
 	UPushBoxLevelData* GetTemporaryLevelData() const { return TemporaryLevelData; }
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
+	bool SaveTemporaryLevelDataAsAssetWithDialog();
+
+	UPROPERTY(BlueprintAssignable, Category = "LevelEditor|Data")
+	FOnLevelDataAssetSaved OnLevelDataAssetSaved;
 
 protected:
 	virtual FReply NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;

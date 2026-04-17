@@ -10,4 +10,7 @@ UCLASS(Blueprintable)
 class APlayerSpawnCell : public AGridCellBase
 {
 	GENERATED_BODY()
+
+protected:
+	virtual void BuildEditorPreview_Implementation(FCellEditorPreviewContext& PreviewContext) override;
 };

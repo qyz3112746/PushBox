@@ -7,17 +7,23 @@
 #include "Components/Border.h"
 #include "Components/UniformGridPanel.h"
 #include "Components/UniformGridSlot.h"
+#include "ContentBrowserModule.h"
 #include "Engine/Texture2D.h"
 #include "Editor.h"
 #include "GridCellBase.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
 #include "Framework/Application/SlateApplication.h"
+#include "IContentBrowserSingleton.h"
 #include "LevelGridCellWidget.h"
 #include "PushBoxEditorBridgeSubsystem.h"
 #include "Blueprint/WidgetTree.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "UObject/SavePackage.h"
 
 bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
 {
@@ -43,6 +49,84 @@ bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelD
 	RebuildGrid();
 	ResetView();
 	SyncTemporaryLevelDataFromResolved();
+	return true;
+}
+
+bool ULevelDataGridEditorWidget::SaveTemporaryLevelDataAsAssetWithDialog()
+{
+	if (!TemporaryLevelData)
+	{
+		return false;
+	}
+
+	FContentBrowserModule& ContentBrowserModule = FModuleManager::LoadModuleChecked<FContentBrowserModule>("ContentBrowser");
+
+	FSaveAssetDialogConfig SaveConfig;
+	SaveConfig.DialogTitleOverride = FText::FromString(TEXT("Save PushBox Level Data Asset"));
+	SaveConfig.DefaultPath = TEXT("/Game");
+	SaveConfig.DefaultAssetName = !TemporaryLevelData->LevelId.IsNone()
+		? FString::Printf(TEXT("DA_%s"), *TemporaryLevelData->LevelId.ToString())
+		: TEXT("DA_NewLevel");
+	SaveConfig.AssetClassNames.Add(UPushBoxLevelData::StaticClass()->GetClassPathName());
+	SaveConfig.ExistingAssetPolicy = ESaveAssetDialogExistingAssetPolicy::AllowButWarn;
+
+	const FString ObjectPath = ContentBrowserModule.Get().CreateModalSaveAssetDialog(SaveConfig);
+	if (ObjectPath.IsEmpty())
+	{
+		return false;
+	}
+
+	if (!FPackageName::IsValidObjectPath(ObjectPath))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SaveTemporaryLevelDataAsAssetWithDialog failed: invalid object path '%s'."), *ObjectPath);
+		return false;
+	}
+
+	const FSoftObjectPath SavedObjectPath(ObjectPath);
+	const FString PackageName = SavedObjectPath.GetLongPackageName();
+	const FString AssetName = SavedObjectPath.GetAssetName();
+	if (!FPackageName::IsValidLongPackageName(PackageName) || AssetName.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("SaveTemporaryLevelDataAsAssetWithDialog failed: invalid package/object from path '%s'."), *ObjectPath);
+		return false;
+	}
+	UPackage* Package = CreatePackage(*PackageName);
+	if (!Package)
+	{
+		return false;
+	}
+
+	UPushBoxLevelData* SavedAsset = FindObject<UPushBoxLevelData>(Package, *AssetName);
+	const bool bNewAsset = (SavedAsset == nullptr);
+	if (!SavedAsset)
+	{
+		SavedAsset = NewObject<UPushBoxLevelData>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+	}
+	if (!SavedAsset)
+	{
+		return false;
+	}
+
+	SavedAsset->CopyFromLevelData(TemporaryLevelData);
+	SavedAsset->MarkPackageDirty();
+	Package->MarkPackageDirty();
+
+	if (bNewAsset)
+	{
+		FAssetRegistryModule::AssetCreated(SavedAsset);
+	}
+
+	const FString PackageFileName = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_None;
+	const bool bSaveSucceeded = UPackage::SavePackage(Package, SavedAsset, *PackageFileName, SaveArgs);
+	if (!bSaveSucceeded)
+	{
+		return false;
+	}
+
+	OnLevelDataAssetSaved.Broadcast(SavedAsset);
 	return true;
 }
 

@@ -26,7 +26,9 @@ public class PushBoxEditor : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"PropertyEditor",
-			"UnrealEd"
+			"UnrealEd",
+			"AssetRegistry",
+			"ContentBrowser"
 		});
 
 		PublicIncludePaths.Add(Path.Combine(ModuleDirectory, "..", "PushBox"));

@@ -20,3 +20,8 @@ void ABoxCell::BeginPlay()
 	Super::BeginPlay();
 	SpawnedBox = SpawnBoxAt(BoxSpawnClass, GetGridCoord());
 }
+
+void ABoxCell::BuildEditorPreview_Implementation(FCellEditorPreviewContext& PreviewContext)
+{
+	SpawnPreviewBoxAt(PreviewContext, BoxSpawnClass, GetGridCoord());
+}
