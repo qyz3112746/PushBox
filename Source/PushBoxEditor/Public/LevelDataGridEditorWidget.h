@@ -95,7 +95,10 @@ protected:
 	void HandleCellMouseReleased();
 
 	void RebuildGrid();
+	void InitializeFixedGridIfNeeded();
+	bool ReloadMapDataWithoutRebuild(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
 	void RefreshAllCells();
+	void ApplyValidRectVisibilityAndHitTest();
 	void ApplyTransform();
 	void ClampPanOffset();
 	void ResetView();
@@ -117,8 +120,11 @@ protected:
 	int32 CoordToIndex(const FIntPoint& Coord) const;
 	FIntPoint ViewToDataCoord(const FIntPoint& ViewCoord) const;
 	FIntPoint DataToViewCoord(const FIntPoint& DataCoord) const;
+	int32 ViewCoordToPoolIndex(const FIntPoint& ViewCoord) const;
 	int32 GetViewWidth() const;
 	int32 GetViewHeight() const;
+	int32 GetPoolViewWidth() const;
+	int32 GetPoolViewHeight() const;
 	void RefreshSelectionVisuals(const TSet<int32>& OldSelection);
 	void UpdateSelectionFromDragRect();
 	void BuildRectSelectionSet(const FIntPoint& A, const FIntPoint& B, TSet<int32>& OutSet) const;
@@ -131,6 +137,7 @@ protected:
 	int32 ToIndex(const FIntPoint& Coord) const;
 	bool IsCoordValid(const FIntPoint& Coord) const;
 	bool IsViewCoordValid(const FIntPoint& Coord) const;
+	bool IsViewCoordInPool(const FIntPoint& Coord) const;
 	void UpdateContentBaseSize();
 
 protected:
@@ -213,8 +220,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UBorder> SelectionMarqueeWidget;
 
-	int32 GridWidth = 1;
-	int32 GridHeight = 1;
+	int32 GridWidth = 0;
+	int32 GridHeight = 0;
+	bool bFixedGridInitialized = false;
 	bool bIsPanning = false;
 	bool bIsSelecting = false;
 	bool bSelectionMoved = false;
