@@ -37,13 +37,7 @@ void FPushBoxFlowNodeCustomization::CustomizeChildren(TSharedRef<IPropertyHandle
 	RootHandle = StructPropertyHandle;
 	PropertyUtilities = StructCustomizationUtils.GetPropertyUtilities();
 
-	NodeIdHandle = StructPropertyHandle->GetChildHandle(GET_MEMBER_NAME_CHECKED(FPushBoxFlowNode, NodeId));
 	ProcessControllerHandle = StructPropertyHandle->GetChildHandle(GET_MEMBER_NAME_CHECKED(FPushBoxFlowNode, ProcessController));
-
-	if (NodeIdHandle.IsValid() && NodeIdHandle->IsValidHandle())
-	{
-		StructBuilder.AddProperty(NodeIdHandle.ToSharedRef());
-	}
 
 	if (ProcessControllerHandle.IsValid() && ProcessControllerHandle->IsValidHandle())
 	{

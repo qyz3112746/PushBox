@@ -2,12 +2,14 @@
 
 #include "PushBoxFlowDirector.h"
 
+#include "Algo/Sort.h"
 #include "LevelProcessController.h"
 #include "PushBox.h"
 #include "PushBoxFlowDataAsset.h"
 #include "Engine/Blueprint.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "UObject/SoftObjectPath.h"
 
 APushBoxFlowDirector::APushBoxFlowDirector()
 {
@@ -106,6 +108,11 @@ bool APushBoxFlowDirector::ConfirmReplayCurrent()
 	return ActiveProcessController->ConfirmRestartCurrentLevel();
 }
 
+bool APushBoxFlowDirector::StartFlowAtNodeLevel(int32 NodeIndex, int32 LevelIndexInNode)
+{
+	return ActivateNodeLevel(NodeIndex, LevelIndexInNode);
+}
+
 bool APushBoxFlowDirector::ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexInNode)
 {
 	if (!FlowDataAsset || !FlowDataAsset->Nodes.IsValidIndex(NodeIndex))
@@ -115,12 +122,11 @@ bool APushBoxFlowDirector::ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexIn
 	}
 
 	const FPushBoxFlowNode& Node = FlowDataAsset->Nodes[NodeIndex];
-	ALevelProcessController* Controller = ResolveNodeController(Node);
+	ALevelProcessController* Controller = ResolveNodeController(Node, NodeIndex);
 	if (!Controller)
 	{
-		UE_LOG(LogPushBox, Error, TEXT("FlowDirector::ActivateNodeLevel failed: node %d could not resolve ProcessController (NodeId=%s, Ref=%s)."),
+		UE_LOG(LogPushBox, Error, TEXT("FlowDirector::ActivateNodeLevel failed: node %d could not resolve ProcessController (Ref=%s)."),
 			NodeIndex,
-			*Node.NodeId.ToString(),
 			*Node.ProcessController.ToSoftObjectPath().ToString());
 		return false;
 	}
@@ -167,7 +173,7 @@ void APushBoxFlowDirector::HandleActiveControllerFlowCompleted()
 	// Keep the director as the single completion source.
 }
 
-ALevelProcessController* APushBoxFlowDirector::ResolveNodeController(const FPushBoxFlowNode& Node) const
+ALevelProcessController* APushBoxFlowDirector::ResolveNodeController(const FPushBoxFlowNode& Node, int32 NodeIndex) const
 {
 	// 1) Direct instance reference (best case).
 	if (ALevelProcessController* DirectController = Node.ProcessController.Get())
@@ -184,27 +190,52 @@ ALevelProcessController* APushBoxFlowDirector::ResolveNodeController(const FPush
 		return nullptr;
 	}
 
-	// 2) NodeId tag fallback.
-	if (!Node.NodeId.IsNone())
-	{
-		for (TActorIterator<ALevelProcessController> It(World); It; ++It)
-		{
-			ALevelProcessController* Candidate = *It;
-			if (!Candidate)
-			{
-				continue;
-			}
+	const FSoftObjectPath RefPath = Node.ProcessController.ToSoftObjectPath();
 
-			if (Candidate->ActorHasTag(Node.NodeId) || Candidate->GetFName() == Node.NodeId)
+	// 2) Soft actor reference by object-name fallback (handles PIE world duplication).
+	if (RefPath.IsValid())
+	{
+		FString TargetActorName;
+		const FString SubPath = RefPath.GetSubPathString(); // e.g. PersistentLevel.BP_LevelProcessController_C_0
+		if (!SubPath.IsEmpty())
+		{
+			int32 LastDot = INDEX_NONE;
+			if (SubPath.FindLastChar(TEXT('.'), LastDot) && LastDot + 1 < SubPath.Len())
 			{
-				return Candidate;
+				TargetActorName = SubPath.Mid(LastDot + 1);
+			}
+		}
+
+		if (TargetActorName.IsEmpty())
+		{
+			FString RefString = RefPath.ToString();
+			int32 LastDot = INDEX_NONE;
+			if (RefString.FindLastChar(TEXT('.'), LastDot) && LastDot + 1 < RefString.Len())
+			{
+				TargetActorName = RefString.Mid(LastDot + 1);
+			}
+		}
+
+		if (!TargetActorName.IsEmpty())
+		{
+			for (TActorIterator<ALevelProcessController> It(World); It; ++It)
+			{
+				ALevelProcessController* Candidate = *It;
+				if (!Candidate)
+				{
+					continue;
+				}
+
+				if (Candidate->GetName() == TargetActorName || Candidate->GetPathName().EndsWith(TargetActorName))
+				{
+					return Candidate;
+				}
 			}
 		}
 	}
 
 	// 3) Soft reference might be a Blueprint class asset; resolve by class in current world.
 	UClass* DesiredClass = nullptr;
-	const FSoftObjectPath RefPath = Node.ProcessController.ToSoftObjectPath();
 	if (RefPath.IsValid())
 	{
 		if (UObject* RefObject = RefPath.TryLoad())
@@ -237,18 +268,57 @@ ALevelProcessController* APushBoxFlowDirector::ResolveNodeController(const FPush
 				continue;
 			}
 
-			if (!Node.NodeId.IsNone() && Candidate->ActorHasTag(Node.NodeId))
-			{
-				return Candidate;
+				Matches.Add(Candidate);
 			}
-
-			Matches.Add(Candidate);
-		}
 
 		if (Matches.Num() > 0)
 		{
-			// If there are multiple same-class controllers and we already have an active one,
-			// prefer switching to a different instance to enable node-to-node transitions.
+			Algo::Sort(Matches, [](const ALevelProcessController* A, const ALevelProcessController* B)
+			{
+				return GetNameSafe(A) < GetNameSafe(B);
+			});
+
+			// For duplicate node definitions that point to the same controller reference/class,
+			// map by ordinal occurrence in Nodes[] so each node can bind to a different placed controller.
+			int32 DuplicateOrdinal = 0;
+			if (FlowDataAsset && FlowDataAsset->Nodes.IsValidIndex(NodeIndex))
+			{
+				const FSoftObjectPath CurrentRefPath = Node.ProcessController.ToSoftObjectPath();
+				const UClass* CurrentDesiredClass = DesiredClass;
+				for (int32 ScanIndex = 0; ScanIndex < NodeIndex; ++ScanIndex)
+				{
+					const FPushBoxFlowNode& ScanNode = FlowDataAsset->Nodes[ScanIndex];
+					const FSoftObjectPath ScanRefPath = ScanNode.ProcessController.ToSoftObjectPath();
+					if (CurrentRefPath.IsValid() && ScanRefPath.IsValid() && ScanRefPath == CurrentRefPath)
+					{
+						++DuplicateOrdinal;
+						continue;
+					}
+
+					UObject* ScanObject = ScanRefPath.IsValid() ? ScanRefPath.TryLoad() : nullptr;
+					UClass* ScanClass = nullptr;
+					if (UClass* RefClass = Cast<UClass>(ScanObject))
+					{
+						ScanClass = RefClass;
+					}
+					else if (const UBlueprint* RefBlueprint = Cast<UBlueprint>(ScanObject))
+					{
+						ScanClass = RefBlueprint->GeneratedClass;
+					}
+
+					if (ScanClass && CurrentDesiredClass && ScanClass == CurrentDesiredClass)
+					{
+						++DuplicateOrdinal;
+					}
+				}
+			}
+
+			if (DuplicateOrdinal >= 0 && DuplicateOrdinal < Matches.Num())
+			{
+				return Matches[DuplicateOrdinal];
+			}
+
+			// Backward-compatible fallback.
 			if (Matches.Num() > 1 && ActiveProcessController)
 			{
 				for (ALevelProcessController* Candidate : Matches)

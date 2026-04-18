@@ -14,9 +14,6 @@ struct FPushBoxFlowNode
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PushBox|Flow")
-	FName NodeId = NAME_None;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "PushBox|Flow")
 	TSoftObjectPtr<ALevelProcessController> ProcessController;
 };
 

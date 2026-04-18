@@ -22,7 +22,6 @@ private:
 	ALevelProcessController* ResolveProcessController() const;
 
 	TSharedPtr<IPropertyHandle> RootHandle;
-	TSharedPtr<IPropertyHandle> NodeIdHandle;
 	TSharedPtr<IPropertyHandle> ProcessControllerHandle;
 	TWeakPtr<IPropertyUtilities> PropertyUtilities;
 };
