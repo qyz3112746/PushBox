@@ -47,6 +47,7 @@ bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelD
 	SelectedIndices.Reset();
 	SelectionBaseIndices.Reset();
 	bIsSelecting = false;
+	bPastePreviewActive = false;
 	ClearHistoryStacks();
 	return ReloadMapDataWithoutRebuild(InData, InOutCells);
 }
@@ -199,6 +200,284 @@ bool ULevelDataGridEditorWidget::CanUndo() const
 bool ULevelDataGridEditorWidget::CanRedo() const
 {
 	return RedoStack.Num() > 0;
+}
+
+bool ULevelDataGridEditorWidget::StartPastePreviewFromCurrentSelection()
+{
+	return CopySelectionToClipboard();
+}
+
+void ULevelDataGridEditorWidget::CancelPastePreview()
+{
+	bPastePreviewActive = false;
+}
+
+bool ULevelDataGridEditorWidget::CopySelectionToClipboard()
+{
+	if (SelectedIndices.Num() <= 0 || GridWidth <= 0 || GridHeight <= 0)
+	{
+		return false;
+	}
+
+	int32 MinViewX = TNumericLimits<int32>::Max();
+	int32 MinViewY = TNumericLimits<int32>::Max();
+	int32 MaxViewX = TNumericLimits<int32>::Lowest();
+	int32 MaxViewY = TNumericLimits<int32>::Lowest();
+
+	TArray<FIntPoint> ViewCoords;
+	ViewCoords.Reserve(SelectedIndices.Num());
+
+	for (const int32 Index : SelectedIndices)
+	{
+		if (!ResolvedCells.IsValidIndex(Index))
+		{
+			continue;
+		}
+
+		const int32 X = Index % GridWidth;
+		const int32 Y = Index / GridWidth;
+		const FIntPoint ViewCoord = DataToViewCoord(FIntPoint(X, Y));
+		if (!IsViewCoordValid(ViewCoord))
+		{
+			continue;
+		}
+
+		MinViewX = FMath::Min(MinViewX, ViewCoord.X);
+		MinViewY = FMath::Min(MinViewY, ViewCoord.Y);
+		MaxViewX = FMath::Max(MaxViewX, ViewCoord.X);
+		MaxViewY = FMath::Max(MaxViewY, ViewCoord.Y);
+		ViewCoords.Add(ViewCoord);
+	}
+
+	if (ViewCoords.Num() <= 0 || MinViewX > MaxViewX || MinViewY > MaxViewY)
+	{
+		return false;
+	}
+
+	const int32 PatternWidth = (MaxViewX - MinViewX) + 1;
+	const int32 PatternHeight = (MaxViewY - MinViewY) + 1;
+	if (PatternWidth <= 0 || PatternHeight <= 0)
+	{
+		return false;
+	}
+
+	ClipboardPattern.Width = PatternWidth;
+	ClipboardPattern.Height = PatternHeight;
+	ClipboardPattern.Cells.Reset();
+	ClipboardPattern.Occupied.Reset();
+	ClipboardPattern.Cells.SetNum(PatternWidth * PatternHeight);
+	ClipboardPattern.Occupied.SetNum(PatternWidth * PatternHeight);
+	for (int32 PatternIndex = 0; PatternIndex < (PatternWidth * PatternHeight); ++PatternIndex)
+	{
+		ClipboardPattern.Cells[PatternIndex] = nullptr;
+		ClipboardPattern.Occupied[PatternIndex] = false;
+	}
+
+	for (const FIntPoint& ViewCoord : ViewCoords)
+	{
+		const FIntPoint DataCoord = ViewToDataCoord(ViewCoord);
+		const int32 SourceIndex = CoordToIndex(DataCoord);
+		if (!ResolvedCells.IsValidIndex(SourceIndex))
+		{
+			continue;
+		}
+
+		const int32 LocalX = ViewCoord.X - MinViewX;
+		const int32 LocalY = ViewCoord.Y - MinViewY;
+		const int32 PatternIndex = (LocalY * PatternWidth) + LocalX;
+		if (ClipboardPattern.Cells.IsValidIndex(PatternIndex))
+		{
+			ClipboardPattern.Cells[PatternIndex] = ResolvedCells[SourceIndex];
+			ClipboardPattern.Occupied[PatternIndex] = true;
+		}
+	}
+
+	PasteHoverViewCoord = FIntPoint(MinViewX, MinViewY);
+	bPastePreviewActive = ClipboardPattern.IsValid();
+	PastePreviewBlinkPhase = 0.0f;
+
+	ClearSelection();
+	Invalidate(EInvalidateWidgetReason::Paint);
+	return bPastePreviewActive;
+}
+
+bool ULevelDataGridEditorWidget::PasteClipboardAtViewCoord(const FIntPoint& AnchorViewCoord)
+{
+	if (!bPastePreviewActive || !ClipboardPattern.IsValid() || GridWidth <= 0 || GridHeight <= 0)
+	{
+		return false;
+	}
+
+	TArray<int32> ChangedIndices;
+	ChangedIndices.Reserve(ClipboardPattern.Width * ClipboardPattern.Height);
+	bool bHasAnyCandidate = false;
+
+	for (int32 LocalY = 0; LocalY < ClipboardPattern.Height; ++LocalY)
+	{
+		for (int32 LocalX = 0; LocalX < ClipboardPattern.Width; ++LocalX)
+		{
+			const int32 PatternIndex = (LocalY * ClipboardPattern.Width) + LocalX;
+			if (!ClipboardPattern.Cells.IsValidIndex(PatternIndex) || !ClipboardPattern.Occupied.IsValidIndex(PatternIndex) || !ClipboardPattern.Occupied[PatternIndex])
+			{
+				continue;
+			}
+			bHasAnyCandidate = true;
+
+			const FIntPoint TargetViewCoord = AnchorViewCoord + FIntPoint(LocalX, LocalY);
+			if (!IsViewCoordValid(TargetViewCoord))
+			{
+				// Auto-crop out-of-bounds area.
+				continue;
+			}
+
+			const FIntPoint TargetDataCoord = ViewToDataCoord(TargetViewCoord);
+			const int32 TargetIndex = CoordToIndex(TargetDataCoord);
+			if (!ResolvedCells.IsValidIndex(TargetIndex))
+			{
+				continue;
+			}
+
+			const TSubclassOf<AGridCellBase> NewCellClass = ClipboardPattern.Cells[PatternIndex];
+			if (ResolvedCells[TargetIndex] == NewCellClass)
+			{
+				continue;
+			}
+
+			ResolvedCells[TargetIndex] = NewCellClass;
+			ChangedIndices.Add(TargetIndex);
+		}
+	}
+
+	if (!bHasAnyCandidate || ChangedIndices.Num() <= 0)
+	{
+		return false;
+	}
+
+	if (!bApplyingHistory && TemporaryLevelData)
+	{
+		PushSnapshot(UndoStack);
+		RedoStack.Reset();
+	}
+
+	for (const int32 Index : ChangedIndices)
+	{
+		RefreshWidgetAtIndex(Index);
+	}
+	SyncTemporaryLevelDataFromResolved();
+	Invalidate(EInvalidateWidgetReason::Paint);
+	return true;
+}
+
+void ULevelDataGridEditorWidget::UpdatePasteHoverFromCursor(const FGeometry& InGeometry)
+{
+	if (!bPastePreviewActive || !ClipboardPattern.IsValid())
+	{
+		return;
+	}
+
+	FIntPoint HoverCoord = FIntPoint::ZeroValue;
+	if (!TryGetCoordFromPointer(InGeometry, FSlateApplication::Get().GetCursorPos(), HoverCoord))
+	{
+		return;
+	}
+
+	if (HoverCoord != PasteHoverViewCoord)
+	{
+		PasteHoverViewCoord = HoverCoord;
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
+void ULevelDataGridEditorWidget::RotateClipboardCCW()
+{
+	if (!ClipboardPattern.IsValid())
+	{
+		return;
+	}
+
+	const int32 OldW = ClipboardPattern.Width;
+	const int32 OldH = ClipboardPattern.Height;
+	const int32 NewW = OldH;
+	const int32 NewH = OldW;
+	TArray<TSubclassOf<AGridCellBase>> NewCells;
+	TArray<bool> NewOccupied;
+	NewCells.SetNum(NewW * NewH);
+	NewOccupied.SetNum(NewW * NewH);
+
+	for (int32 OldY = 0; OldY < OldH; ++OldY)
+	{
+		for (int32 OldX = 0; OldX < OldW; ++OldX)
+		{
+			const int32 OldIndex = (OldY * OldW) + OldX;
+			if (!ClipboardPattern.Cells.IsValidIndex(OldIndex) || !ClipboardPattern.Occupied.IsValidIndex(OldIndex))
+			{
+				continue;
+			}
+
+			const int32 NewX = OldY;
+			const int32 NewY = (NewH - 1) - OldX;
+			const int32 NewIndex = (NewY * NewW) + NewX;
+			if (!NewCells.IsValidIndex(NewIndex) || !NewOccupied.IsValidIndex(NewIndex))
+			{
+				continue;
+			}
+
+			NewCells[NewIndex] = ClipboardPattern.Cells[OldIndex];
+			NewOccupied[NewIndex] = ClipboardPattern.Occupied[OldIndex];
+		}
+	}
+
+	ClipboardPattern.Width = NewW;
+	ClipboardPattern.Height = NewH;
+	ClipboardPattern.Cells = MoveTemp(NewCells);
+	ClipboardPattern.Occupied = MoveTemp(NewOccupied);
+	Invalidate(EInvalidateWidgetReason::Paint);
+}
+
+void ULevelDataGridEditorWidget::RotateClipboardCW()
+{
+	if (!ClipboardPattern.IsValid())
+	{
+		return;
+	}
+
+	const int32 OldW = ClipboardPattern.Width;
+	const int32 OldH = ClipboardPattern.Height;
+	const int32 NewW = OldH;
+	const int32 NewH = OldW;
+	TArray<TSubclassOf<AGridCellBase>> NewCells;
+	TArray<bool> NewOccupied;
+	NewCells.SetNum(NewW * NewH);
+	NewOccupied.SetNum(NewW * NewH);
+
+	for (int32 OldY = 0; OldY < OldH; ++OldY)
+	{
+		for (int32 OldX = 0; OldX < OldW; ++OldX)
+		{
+			const int32 OldIndex = (OldY * OldW) + OldX;
+			if (!ClipboardPattern.Cells.IsValidIndex(OldIndex) || !ClipboardPattern.Occupied.IsValidIndex(OldIndex))
+			{
+				continue;
+			}
+
+			const int32 NewX = (NewW - 1) - OldY;
+			const int32 NewY = OldX;
+			const int32 NewIndex = (NewY * NewW) + NewX;
+			if (!NewCells.IsValidIndex(NewIndex) || !NewOccupied.IsValidIndex(NewIndex))
+			{
+				continue;
+			}
+
+			NewCells[NewIndex] = ClipboardPattern.Cells[OldIndex];
+			NewOccupied[NewIndex] = ClipboardPattern.Occupied[OldIndex];
+		}
+	}
+
+	ClipboardPattern.Width = NewW;
+	ClipboardPattern.Height = NewH;
+	ClipboardPattern.Cells = MoveTemp(NewCells);
+	ClipboardPattern.Occupied = MoveTemp(NewOccupied);
+	Invalidate(EInvalidateWidgetReason::Paint);
 }
 
 bool ULevelDataGridEditorWidget::WriteBackToLevelData()
@@ -414,8 +693,19 @@ void ULevelDataGridEditorWidget::NativeDestruct()
 
 FReply ULevelDataGridEditorWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (InKeyEvent.GetKey() == EKeys::Escape)
+	{
+		bPastePreviewActive = false;
+		return FReply::Handled();
+	}
+
 	if (InKeyEvent.IsControlDown())
 	{
+		if (InKeyEvent.GetKey() == EKeys::C)
+		{
+			CopySelectionToClipboard();
+			return FReply::Handled();
+		}
 		if (InKeyEvent.GetKey() == EKeys::Z)
 		{
 			Undo();
@@ -424,6 +714,19 @@ FReply ULevelDataGridEditorWidget::NativeOnPreviewKeyDown(const FGeometry& InGeo
 		if (InKeyEvent.GetKey() == EKeys::Y)
 		{
 			Redo();
+			return FReply::Handled();
+		}
+	}
+	else if (bPastePreviewActive && ClipboardPattern.IsValid())
+	{
+		if (InKeyEvent.GetKey() == EKeys::Q)
+		{
+			RotateClipboardCCW();
+			return FReply::Handled();
+		}
+		if (InKeyEvent.GetKey() == EKeys::E)
+		{
+			RotateClipboardCW();
 			return FReply::Handled();
 		}
 	}
@@ -439,6 +742,13 @@ FReply ULevelDataGridEditorWidget::NativeOnPreviewMouseButtonDown(const FGeometr
 void ULevelDataGridEditorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	if (bPastePreviewActive && ClipboardPattern.IsValid())
+	{
+		UpdatePasteHoverFromCursor(MyGeometry);
+		PastePreviewBlinkPhase += InDeltaTime * FMath::Max(0.1f, PastePreviewBlinkSpeed);
+		Invalidate(EInvalidateWidgetReason::Paint);
+	}
 
 	if (bIsSelecting && FSlateApplication::Get().GetPressedMouseButtons().Contains(EKeys::LeftMouseButton))
 	{
@@ -488,6 +798,7 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 
 	const float EffectiveZoom = FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
 	const float OutlineThickness = FMath::Max(1.0f, SelectedCellOutlineThickness);
+	int32 MaxLayer = SuperLayer + 1;
 
 	// Draw selected-cell outlines (always visible, independent of cell fill color).
 	for (const int32 Index : SelectedIndices)
@@ -531,52 +842,110 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
 	}
 
-	if (!bIsSelecting || (!bSelectionMoved && SelectionStartCoord == SelectionCurrentCoord))
+	if (bIsSelecting && (bSelectionMoved || SelectionStartCoord != SelectionCurrentCoord))
 	{
-		return SuperLayer + 1;
+		const int32 MinX = FMath::Min(SelectionStartCoord.X, SelectionCurrentCoord.X);
+		const int32 MaxX = FMath::Max(SelectionStartCoord.X, SelectionCurrentCoord.X);
+		const int32 MinY = FMath::Min(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+		const int32 MaxY = FMath::Max(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+
+		const FVector2D RectPos(
+			PanOffset.X + (static_cast<float>(MinX) * CellPixelSize * EffectiveZoom),
+			PanOffset.Y + (static_cast<float>(MinY) * CellPixelSize * EffectiveZoom));
+		const FVector2D RectSize(
+			static_cast<float>(MaxX - MinX + 1) * CellPixelSize * EffectiveZoom,
+			static_cast<float>(MaxY - MinY + 1) * CellPixelSize * EffectiveZoom);
+
+		FSlateDrawElement::MakeBox(
+			OutDrawElements,
+			SuperLayer + 1,
+			AllottedGeometry.ToPaintGeometry(RectPos, RectSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"),
+			ESlateDrawEffect::None,
+			SelectionMarqueeColor);
+
+		const float BorderThickness = 2.0f;
+		const FLinearColor BorderColor = FLinearColor(SelectionMarqueeColor.R, SelectionMarqueeColor.G, SelectionMarqueeColor.B, 0.9f);
+		const FVector2D TopSize(RectSize.X, BorderThickness);
+		const FVector2D BottomPos(RectPos.X, RectPos.Y + RectSize.Y - BorderThickness);
+		const FVector2D SideSize(BorderThickness, RectSize.Y);
+		const FVector2D RightPos(RectPos.X + RectSize.X - BorderThickness, RectPos.Y);
+
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+		FSlateDrawElement::MakeBox(
+			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
+			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+		MaxLayer = SuperLayer + 2;
 	}
 
-	const int32 MinX = FMath::Min(SelectionStartCoord.X, SelectionCurrentCoord.X);
-	const int32 MaxX = FMath::Max(SelectionStartCoord.X, SelectionCurrentCoord.X);
-	const int32 MinY = FMath::Min(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
-	const int32 MaxY = FMath::Max(SelectionStartCoord.Y, SelectionCurrentCoord.Y);
+	if (bPastePreviewActive && ClipboardPattern.IsValid())
+	{
+		const float Blink = 0.5f + (0.5f * FMath::Sin(PastePreviewBlinkPhase));
+		const float PreviewAlpha = FMath::Lerp(0.25f, 0.75f, Blink);
+		const FVector2D CellSizeScaled(CellPixelSize * EffectiveZoom, CellPixelSize * EffectiveZoom);
+		int32 PreviewLayer = MaxLayer + 1;
 
-	const FVector2D RectPos(
-		PanOffset.X + (static_cast<float>(MinX) * CellPixelSize * EffectiveZoom),
-		PanOffset.Y + (static_cast<float>(MinY) * CellPixelSize * EffectiveZoom));
-	const FVector2D RectSize(
-		static_cast<float>(MaxX - MinX + 1) * CellPixelSize * EffectiveZoom,
-		static_cast<float>(MaxY - MinY + 1) * CellPixelSize * EffectiveZoom);
+		for (int32 LocalY = 0; LocalY < ClipboardPattern.Height; ++LocalY)
+		{
+			for (int32 LocalX = 0; LocalX < ClipboardPattern.Width; ++LocalX)
+			{
+				const FIntPoint TargetViewCoord = PasteHoverViewCoord + FIntPoint(LocalX, LocalY);
+				if (!IsViewCoordValid(TargetViewCoord))
+				{
+					continue;
+				}
 
-	FSlateDrawElement::MakeBox(
-		OutDrawElements,
-		SuperLayer + 1,
-		AllottedGeometry.ToPaintGeometry(RectPos, RectSize),
-		FCoreStyle::Get().GetBrush("WhiteBrush"),
-		ESlateDrawEffect::None,
-		SelectionMarqueeColor);
+				const int32 ClipboardIndex = (LocalY * ClipboardPattern.Width) + LocalX;
+				if (!ClipboardPattern.Cells.IsValidIndex(ClipboardIndex) || !ClipboardPattern.Occupied.IsValidIndex(ClipboardIndex) || !ClipboardPattern.Occupied[ClipboardIndex])
+				{
+					continue;
+				}
 
-	const float BorderThickness = 2.0f;
-	const FLinearColor BorderColor = FLinearColor(SelectionMarqueeColor.R, SelectionMarqueeColor.G, SelectionMarqueeColor.B, 0.9f);
-	const FVector2D TopSize(RectSize.X, BorderThickness);
-	const FVector2D BottomPos(RectPos.X, RectPos.Y + RectSize.Y - BorderThickness);
-	const FVector2D SideSize(BorderThickness, RectSize.Y);
-	const FVector2D RightPos(RectPos.X + RectSize.X - BorderThickness, RectPos.Y);
+				const TSubclassOf<AGridCellBase> ClipboardCellClass = ClipboardPattern.Cells[ClipboardIndex];
+				const FVector2D RectPos(
+					PanOffset.X + (static_cast<float>(TargetViewCoord.X) * CellPixelSize * EffectiveZoom),
+					PanOffset.Y + (static_cast<float>(TargetViewCoord.Y) * CellPixelSize * EffectiveZoom));
 
-	FSlateDrawElement::MakeBox(
-		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
-		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
-	FSlateDrawElement::MakeBox(
-		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
-		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
-	FSlateDrawElement::MakeBox(
-		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
-		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
-	FSlateDrawElement::MakeBox(
-		OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
-		FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
+				const FCellDisplay* Display = ClipboardCellClass ? CellDisplayLookup.Find(ClipboardCellClass) : nullptr;
+				if (Display && Display->Icon)
+				{
+					FSlateBrush IconBrush;
+					IconBrush.SetResourceObject(Display->Icon);
+					IconBrush.ImageSize = CellSizeScaled;
+					FSlateDrawElement::MakeBox(
+						OutDrawElements,
+						PreviewLayer,
+						AllottedGeometry.ToPaintGeometry(RectPos, CellSizeScaled),
+						&IconBrush,
+						ESlateDrawEffect::None,
+						FLinearColor(1.0f, 1.0f, 1.0f, PreviewAlpha));
+				}
+				else
+				{
+					const FLinearColor BaseColor = Display ? Display->BGColor : FLinearColor(0.75f, 0.75f, 0.75f, 1.0f);
+					FSlateDrawElement::MakeBox(
+						OutDrawElements,
+						PreviewLayer,
+						AllottedGeometry.ToPaintGeometry(RectPos, CellSizeScaled),
+						FCoreStyle::Get().GetBrush("WhiteBrush"),
+						ESlateDrawEffect::None,
+						FLinearColor(BaseColor.R, BaseColor.G, BaseColor.B, PreviewAlpha));
+				}
+			}
+		}
 
-	return SuperLayer + 2;
+		MaxLayer = PreviewLayer;
+	}
+
+	return MaxLayer;
 }
 
 FReply ULevelDataGridEditorWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -689,6 +1058,14 @@ void ULevelDataGridEditorWidget::HandleCellClicked(FIntPoint Coord)
 	{
 		return;
 	}
+
+	if (bPastePreviewActive && ClipboardPattern.IsValid())
+	{
+		PasteHoverViewCoord = Coord;
+		PasteClipboardAtViewCoord(Coord);
+		return;
+	}
+
 	const FModifierKeysState Modifiers = FSlateApplication::Get().GetModifierKeys();
 	EGridSelectionOp Op = EGridSelectionOp::Replace;
 	if (Modifiers.IsControlDown())
@@ -749,6 +1126,7 @@ bool ULevelDataGridEditorWidget::ReloadMapDataWithoutRebuild(UPushBoxLevelData* 
 		ResolvedCells.Reset();
 		SelectedIndices.Reset();
 		SelectionBaseIndices.Reset();
+		bPastePreviewActive = false;
 		ApplyValidRectVisibilityAndHitTest();
 		UpdateContentBaseSize();
 		ClampPanOffset();

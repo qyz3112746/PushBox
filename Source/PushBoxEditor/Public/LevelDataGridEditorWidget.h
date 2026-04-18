@@ -27,6 +27,37 @@ struct FLevelEditorHistorySnapshot
 	TObjectPtr<UPushBoxLevelData> LevelDataSnapshot = nullptr;
 };
 
+USTRUCT()
+struct FGridClipboardPattern
+{
+	GENERATED_BODY()
+
+	UPROPERTY(Transient)
+	int32 Width = 0;
+
+	UPROPERTY(Transient)
+	int32 Height = 0;
+
+	UPROPERTY(Transient)
+	TArray<TSubclassOf<AGridCellBase>> Cells;
+
+	UPROPERTY(Transient)
+	TArray<bool> Occupied;
+
+	bool IsValid() const
+	{
+		return Width > 0 && Height > 0 && Cells.Num() == (Width * Height) && Occupied.Num() == (Width * Height);
+	}
+
+	void Reset()
+	{
+		Width = 0;
+		Height = 0;
+		Cells.Reset();
+		Occupied.Reset();
+	}
+};
+
 UENUM()
 enum class EGridSelectionOp : uint8
 {
@@ -90,6 +121,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "LevelEditor|History")
 	bool CanRedo() const;
 
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Clipboard")
+	bool StartPastePreviewFromCurrentSelection();
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Clipboard")
+	void CancelPastePreview();
+
+	UFUNCTION(BlueprintPure, Category = "LevelEditor|Clipboard")
+	bool IsPastePreviewActive() const { return bPastePreviewActive && ClipboardPattern.IsValid(); }
+
 	UPROPERTY(BlueprintAssignable, Category = "LevelEditor|Data")
 	FOnLevelDataAssetSaved OnLevelDataAssetSaved;
 
@@ -144,6 +184,11 @@ protected:
 	bool ApplyHistorySnapshot(const FLevelEditorHistorySnapshot& Snapshot);
 	void TrimHistoryStack(TArray<FLevelEditorHistorySnapshot>& Stack);
 	void ClearHistoryStacks();
+	bool CopySelectionToClipboard();
+	bool PasteClipboardAtViewCoord(const FIntPoint& AnchorViewCoord);
+	void UpdatePasteHoverFromCursor(const FGeometry& InGeometry);
+	void RotateClipboardCCW();
+	void RotateClipboardCW();
 	void RefreshWidgetAtIndex(int32 Index);
 	bool IsCellDisplayEqual(const FCellDisplay& A, const FCellDisplay& B) const;
 	void SyncTemporaryLevelDataFromResolved();
@@ -195,6 +240,9 @@ protected:
 
 	UPROPERTY(Transient)
 	TArray<FLevelEditorHistorySnapshot> RedoStack;
+
+	UPROPERTY(Transient)
+	FGridClipboardPattern ClipboardPattern;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Data")
 	TSubclassOf<AGridCellBase> DefaultCellClass;
@@ -270,8 +318,12 @@ private:
 	FVector2D LastViewportSize = FVector2D::ZeroVector;
 	bool bHasUserAdjustedView = false;
 	bool bApplyingHistory = false;
+	bool bPastePreviewActive = false;
 	FIntPoint SelectionStartCoord = FIntPoint::ZeroValue;
 	FIntPoint SelectionCurrentCoord = FIntPoint::ZeroValue;
+	FIntPoint PasteHoverViewCoord = FIntPoint::ZeroValue;
+	float PastePreviewBlinkPhase = 0.0f;
+	float PastePreviewBlinkSpeed = 4.0f;
 	EGridSelectionOp CurrentSelectionOp = EGridSelectionOp::Replace;
 	TSet<int32> SelectedIndices;
 	TSet<int32> SelectionBaseIndices;
