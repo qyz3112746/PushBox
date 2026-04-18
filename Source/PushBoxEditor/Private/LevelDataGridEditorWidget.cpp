@@ -47,6 +47,7 @@ bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelD
 	SelectedIndices.Reset();
 	SelectionBaseIndices.Reset();
 	bIsSelecting = false;
+	ClearHistoryStacks();
 	return ReloadMapDataWithoutRebuild(InData, InOutCells);
 }
 
@@ -139,7 +140,65 @@ bool ULevelDataGridEditorWidget::RefreshLevelDisplayWithCellDisplay(UPushBoxLeve
 	{
 		return LoadFromLevelDataWithCellDisplay(InData, InOutCells);
 	}
+
+	if (!bApplyingHistory)
+	{
+		PushSnapshot(UndoStack);
+		RedoStack.Reset();
+	}
 	return ReloadMapDataWithoutRebuild(InData, InOutCells);
+}
+
+bool ULevelDataGridEditorWidget::RefreshLevelDisplayNoHistoryWithCellDisplay(UPushBoxLevelData* InData, TArray<FCellDisplay>& InOutCells)
+{
+	if (!InData)
+	{
+		return false;
+	}
+
+	if (!TemporaryLevelData)
+	{
+		return LoadFromLevelDataWithCellDisplay(InData, InOutCells);
+	}
+
+	// Intentionally skip history write/redo reset for live preview updates.
+	return ReloadMapDataWithoutRebuild(InData, InOutCells);
+}
+
+bool ULevelDataGridEditorWidget::Undo()
+{
+	if (!CanUndo())
+	{
+		return false;
+	}
+
+	PushSnapshot(RedoStack);
+	const FLevelEditorHistorySnapshot Snapshot = UndoStack[0];
+	UndoStack.RemoveAt(0);
+	return ApplyHistorySnapshot(Snapshot);
+}
+
+bool ULevelDataGridEditorWidget::Redo()
+{
+	if (!CanRedo())
+	{
+		return false;
+	}
+
+	PushSnapshot(UndoStack);
+	const FLevelEditorHistorySnapshot Snapshot = RedoStack[0];
+	RedoStack.RemoveAt(0);
+	return ApplyHistorySnapshot(Snapshot);
+}
+
+bool ULevelDataGridEditorWidget::CanUndo() const
+{
+	return UndoStack.Num() > 0;
+}
+
+bool ULevelDataGridEditorWidget::CanRedo() const
+{
+	return RedoStack.Num() > 0;
 }
 
 bool ULevelDataGridEditorWidget::WriteBackToLevelData()
@@ -173,6 +232,12 @@ void ULevelDataGridEditorWidget::SetMapSize(int32 InWidth, int32 InHeight)
 		UE_LOG(LogTemp, Warning, TEXT("SetMapSize rejected: requested size %dx%d exceeds fixed capacity %dx%d."),
 			InWidth, InHeight, FixedGridCapacity, FixedGridCapacity);
 		return;
+	}
+
+	if (!bApplyingHistory && TemporaryLevelData)
+	{
+		PushSnapshot(UndoStack);
+		RedoStack.Reset();
 	}
 
 	TArray<TSubclassOf<AGridCellBase>> OldResolved = ResolvedCells;
@@ -226,6 +291,12 @@ bool ULevelDataGridEditorWidget::ApplyCellDisplayToSelection(const FCellDisplay&
 	if (SelectedIndices.Num() == 0 || !InDisplay.CellType)
 	{
 		return false;
+	}
+
+	if (!bApplyingHistory && TemporaryLevelData)
+	{
+		PushSnapshot(UndoStack);
+		RedoStack.Reset();
 	}
 
 	const TSet<int32> AppliedSelection = SelectedIndices;
@@ -290,6 +361,12 @@ void ULevelDataGridEditorWidget::SetActiveBrushCellClass(TSubclassOf<AGridCellBa
 
 void ULevelDataGridEditorWidget::ClearToDefault()
 {
+	if (!bApplyingHistory && TemporaryLevelData)
+	{
+		PushSnapshot(UndoStack);
+		RedoStack.Reset();
+	}
+
 	for (int32 Index = 0; Index < ResolvedCells.Num(); ++Index)
 	{
 		ResolvedCells[Index] = DefaultCellClass;
@@ -333,6 +410,25 @@ void ULevelDataGridEditorWidget::NativeDestruct()
 	}
 
 	Super::NativeDestruct();
+}
+
+FReply ULevelDataGridEditorWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (InKeyEvent.IsControlDown())
+	{
+		if (InKeyEvent.GetKey() == EKeys::Z)
+		{
+			Undo();
+			return FReply::Handled();
+		}
+		if (InKeyEvent.GetKey() == EKeys::Y)
+		{
+			Redo();
+			return FReply::Handled();
+		}
+	}
+
+	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
 FReply ULevelDataGridEditorWidget::NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -485,6 +581,8 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 
 FReply ULevelDataGridEditorWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
+	FSlateApplication::Get().SetKeyboardFocus(TakeWidget(), EFocusCause::Mouse);
+
 	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
 	{
 		bIsPanning = true;
@@ -585,6 +683,8 @@ FReply ULevelDataGridEditorWidget::NativeOnMouseWheel(const FGeometry& InGeometr
 
 void ULevelDataGridEditorWidget::HandleCellClicked(FIntPoint Coord)
 {
+	FSlateApplication::Get().SetKeyboardFocus(TakeWidget(), EFocusCause::Mouse);
+
 	if (!IsViewCoordValid(Coord))
 	{
 		return;
@@ -1046,6 +1146,59 @@ void ULevelDataGridEditorWidget::RebuildDisplayLookupFromArray(const TArray<FCel
 			CellDisplayLookup.Add(Display.CellType, Display);
 		}
 	}
+}
+
+bool ULevelDataGridEditorWidget::PushSnapshot(TArray<FLevelEditorHistorySnapshot>& TargetStack)
+{
+	if (!TemporaryLevelData)
+	{
+		return false;
+	}
+
+	FLevelEditorHistorySnapshot Snapshot;
+	Snapshot.LevelDataSnapshot = DuplicateObject<UPushBoxLevelData>(TemporaryLevelData, this);
+	if (!Snapshot.LevelDataSnapshot)
+	{
+		return false;
+	}
+
+	TargetStack.Insert(MoveTemp(Snapshot), 0);
+	TrimHistoryStack(TargetStack);
+	return true;
+}
+
+bool ULevelDataGridEditorWidget::ApplyHistorySnapshot(const FLevelEditorHistorySnapshot& Snapshot)
+{
+	if (!Snapshot.LevelDataSnapshot)
+	{
+		return false;
+	}
+
+	// Keep latest display config; undo/redo only rolls back map data.
+	TArray<FCellDisplay> LatestDisplays = TemporaryCellDisplayList;
+	const TObjectPtr<UPushBoxLevelData> OriginalEditingLevelData = EditingLevelData;
+
+	bApplyingHistory = true;
+	const bool bApplied = ReloadMapDataWithoutRebuild(Snapshot.LevelDataSnapshot, LatestDisplays);
+	bApplyingHistory = false;
+
+	EditingLevelData = OriginalEditingLevelData;
+	return bApplied;
+}
+
+void ULevelDataGridEditorWidget::TrimHistoryStack(TArray<FLevelEditorHistorySnapshot>& Stack)
+{
+	const int32 HistoryLimit = FMath::Max(1, MaxHistoryCount);
+	while (Stack.Num() > HistoryLimit)
+	{
+		Stack.RemoveAt(Stack.Num() - 1, 1, EAllowShrinking::No);
+	}
+}
+
+void ULevelDataGridEditorWidget::ClearHistoryStacks()
+{
+	UndoStack.Reset();
+	RedoStack.Reset();
 }
 
 void ULevelDataGridEditorWidget::SyncTemporaryLevelDataFromResolved()

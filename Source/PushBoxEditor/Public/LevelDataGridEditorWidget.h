@@ -14,8 +14,18 @@ class UUniformGridPanel;
 class ULevelGridCellWidget;
 class AGridCellBase;
 class UPushBoxLevelData;
+struct FKeyEvent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLevelDataAssetSaved, UPushBoxLevelData*, SavedLevelDataAsset);
+
+USTRUCT()
+struct FLevelEditorHistorySnapshot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPushBoxLevelData> LevelDataSnapshot = nullptr;
+};
 
 UENUM()
 enum class EGridSelectionOp : uint8
@@ -39,6 +49,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool RefreshLevelDisplayWithCellDisplay(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
+
+	// Repaint map visuals without pushing Undo/Redo history.
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
+	bool RefreshLevelDisplayNoHistoryWithCellDisplay(UPushBoxLevelData* InData, UPARAM(ref) TArray<FCellDisplay>& InOutCells);
 
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	void SetMapSize(int32 InWidth, int32 InHeight);
@@ -64,10 +78,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "LevelEditor|Data")
 	bool SaveTemporaryLevelDataAsAssetWithDialog();
 
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|History")
+	bool Undo();
+
+	UFUNCTION(BlueprintCallable, Category = "LevelEditor|History")
+	bool Redo();
+
+	UFUNCTION(BlueprintPure, Category = "LevelEditor|History")
+	bool CanUndo() const;
+
+	UFUNCTION(BlueprintPure, Category = "LevelEditor|History")
+	bool CanRedo() const;
+
 	UPROPERTY(BlueprintAssignable, Category = "LevelEditor|Data")
 	FOnLevelDataAssetSaved OnLevelDataAssetSaved;
 
 protected:
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 	virtual FReply NativeOnPreviewMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
@@ -113,6 +140,10 @@ protected:
 		int32& OutGridHeight,
 		TSubclassOf<AGridCellBase>& OutDefaultCellClass,
 		TArray<TSubclassOf<AGridCellBase>>& OutResolvedCells) const;
+	bool PushSnapshot(TArray<FLevelEditorHistorySnapshot>& TargetStack);
+	bool ApplyHistorySnapshot(const FLevelEditorHistorySnapshot& Snapshot);
+	void TrimHistoryStack(TArray<FLevelEditorHistorySnapshot>& Stack);
+	void ClearHistoryStacks();
 	void RefreshWidgetAtIndex(int32 Index);
 	bool IsCellDisplayEqual(const FCellDisplay& A, const FCellDisplay& B) const;
 	void SyncTemporaryLevelDataFromResolved();
@@ -159,6 +190,12 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "LevelEditor|Data")
 	TArray<FCellDisplay> TemporaryCellDisplayList;
 
+	UPROPERTY(Transient)
+	TArray<FLevelEditorHistorySnapshot> UndoStack;
+
+	UPROPERTY(Transient)
+	TArray<FLevelEditorHistorySnapshot> RedoStack;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|Data")
 	TSubclassOf<AGridCellBase> DefaultCellClass;
 
@@ -188,6 +225,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|View", meta = (ClampMin = "0.0", ClampMax = "0.9"))
 	float FitPaddingPercent = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "LevelEditor|History", meta = (ClampMin = "1", UIMin = "1"))
+	int32 MaxHistoryCount = 20;
 
 	UPROPERTY(BlueprintReadOnly, Category = "LevelEditor|View")
 	float CurrentZoom = 1.0f;
@@ -229,6 +269,7 @@ private:
 	FVector2D LastMouseScreenPos = FVector2D::ZeroVector;
 	FVector2D LastViewportSize = FVector2D::ZeroVector;
 	bool bHasUserAdjustedView = false;
+	bool bApplyingHistory = false;
 	FIntPoint SelectionStartCoord = FIntPoint::ZeroValue;
 	FIntPoint SelectionCurrentCoord = FIntPoint::ZeroValue;
 	EGridSelectionOp CurrentSelectionOp = EGridSelectionOp::Replace;
