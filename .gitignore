@@ -6,6 +6,8 @@ Saved/
 
 # Visual Studio
 .vs/
+*.sln
+*.vsconfig
 *.VC.db
 *.VC.opendb
 *.suo
@@ -23,6 +25,8 @@ Saved/
 # Logs and temp
 *.log
 *.tmp
+__pycache__/
+*.pyc
 
 # Optional local config
 *.opensdf
