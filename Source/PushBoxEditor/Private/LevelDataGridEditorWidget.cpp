@@ -795,6 +795,12 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 	bool bParentEnabled) const
 {
 	const int32 SuperLayer = Super::NativePaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
+	const auto MakePaintGeometry = [&AllottedGeometry](const FVector2D& InPos, const FVector2D& InSize)
+	{
+		return AllottedGeometry.ToPaintGeometry(
+			FVector2f(static_cast<float>(InSize.X), static_cast<float>(InSize.Y)),
+			FSlateLayoutTransform(FVector2f(static_cast<float>(InPos.X), static_cast<float>(InPos.Y))));
+	};
 
 	const float EffectiveZoom = FMath::Max(CurrentZoom, KINDA_SMALL_NUMBER);
 	const float OutlineThickness = FMath::Max(1.0f, SelectedCellOutlineThickness);
@@ -829,16 +835,16 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 		const FVector2D RightPos(RectPos.X + RectSize.X - OutlineThickness, RectPos.Y);
 
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
+			OutDrawElements, SuperLayer + 1, MakePaintGeometry(RectPos, TopSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
+			OutDrawElements, SuperLayer + 1, MakePaintGeometry(BottomPos, TopSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
+			OutDrawElements, SuperLayer + 1, MakePaintGeometry(RectPos, SideSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 1, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
+			OutDrawElements, SuperLayer + 1, MakePaintGeometry(RightPos, SideSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, SelectedCellOutlineColor);
 	}
 
@@ -859,7 +865,7 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 		FSlateDrawElement::MakeBox(
 			OutDrawElements,
 			SuperLayer + 1,
-			AllottedGeometry.ToPaintGeometry(RectPos, RectSize),
+			MakePaintGeometry(RectPos, RectSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"),
 			ESlateDrawEffect::None,
 			SelectionMarqueeColor);
@@ -872,16 +878,16 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 		const FVector2D RightPos(RectPos.X + RectSize.X - BorderThickness, RectPos.Y);
 
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, TopSize),
+			OutDrawElements, SuperLayer + 2, MakePaintGeometry(RectPos, TopSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(BottomPos, TopSize),
+			OutDrawElements, SuperLayer + 2, MakePaintGeometry(BottomPos, TopSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RectPos, SideSize),
+			OutDrawElements, SuperLayer + 2, MakePaintGeometry(RectPos, SideSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
 		FSlateDrawElement::MakeBox(
-			OutDrawElements, SuperLayer + 2, AllottedGeometry.ToPaintGeometry(RightPos, SideSize),
+			OutDrawElements, SuperLayer + 2, MakePaintGeometry(RightPos, SideSize),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, BorderColor);
 		MaxLayer = SuperLayer + 2;
 	}
@@ -923,7 +929,7 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 					FSlateDrawElement::MakeBox(
 						OutDrawElements,
 						PreviewLayer,
-						AllottedGeometry.ToPaintGeometry(RectPos, CellSizeScaled),
+						MakePaintGeometry(RectPos, CellSizeScaled),
 						&IconBrush,
 						ESlateDrawEffect::None,
 						FLinearColor(1.0f, 1.0f, 1.0f, PreviewAlpha));
@@ -934,7 +940,7 @@ int32 ULevelDataGridEditorWidget::NativePaint(
 					FSlateDrawElement::MakeBox(
 						OutDrawElements,
 						PreviewLayer,
-						AllottedGeometry.ToPaintGeometry(RectPos, CellSizeScaled),
+						MakePaintGeometry(RectPos, CellSizeScaled),
 						FCoreStyle::Get().GetBrush("WhiteBrush"),
 						ESlateDrawEffect::None,
 						FLinearColor(BaseColor.R, BaseColor.G, BaseColor.B, PreviewAlpha));
