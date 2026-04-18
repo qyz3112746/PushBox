@@ -8,6 +8,12 @@
 #include "GridCellBase.h"
 #include "LevelProcessController.h"
 #include "PushBoxLevelData.h"
+#include "EngineUtils.h"
+
+namespace
+{
+	static const FName PushBoxPreviewActorTag(TEXT("PushBoxPreviewActor"));
+}
 
 bool UPushBoxLevelPreviewSubsystem::StartPreview(ALevelProcessController* InController, UPushBoxLevelData* InLevelData, int32 InSequenceIndex)
 {
@@ -54,7 +60,6 @@ bool UPushBoxLevelPreviewSubsystem::StartPreview(ALevelProcessController* InCont
 
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-			SpawnParams.ObjectFlags |= RF_Transient;
 
 			AGridCellBase* SpawnedCell = World->SpawnActorDeferred<AGridCellBase>(
 				CellClass,
@@ -80,7 +85,7 @@ bool UPushBoxLevelPreviewSubsystem::StartPreview(ALevelProcessController* InCont
 			{
 				SpawnedCell->AttachToComponent(InController->GetRootComponent(), FAttachmentTransformRules::KeepWorldTransform);
 			}
-			SpawnedPreviewActors.Add(SpawnedCell);
+			RegisterPreviewActor(SpawnedCell);
 
 			FCellEditorPreviewContext PreviewContext;
 			PreviewContext.GridOrigin = GridOrigin;
@@ -94,10 +99,7 @@ bool UPushBoxLevelPreviewSubsystem::StartPreview(ALevelProcessController* InCont
 
 			for (AActor* ExtraActor : PreviewContext.SpawnedActors)
 			{
-				if (ExtraActor)
-				{
-					SpawnedPreviewActors.Add(ExtraActor);
-				}
+				RegisterPreviewActor(ExtraActor);
 			}
 		}
 	}
@@ -116,16 +118,33 @@ bool UPushBoxLevelPreviewSubsystem::StartPreview(ALevelProcessController* InCont
 
 void UPushBoxLevelPreviewSubsystem::ClearPreview()
 {
-	if (SpawnedPreviewActors.Num() == 0)
+	TArray<AActor*> ActorsToDestroy;
+	for (const TObjectPtr<AActor>& WeakActor : SpawnedPreviewActors)
 	{
-		ActiveProcessController = nullptr;
-		ActiveLevelData = nullptr;
-		return;
+		if (AActor* Actor = WeakActor.Get())
+		{
+			ActorsToDestroy.AddUnique(Actor);
+		}
 	}
 
-	for (int32 Index = SpawnedPreviewActors.Num() - 1; Index >= 0; --Index)
+	// Recovery path for editor restart: subsystem cache is empty, but preview actors may still exist.
+	UWorld* ScanWorld = nullptr;
+	if (ActiveProcessController)
 	{
-		AActor* Actor = SpawnedPreviewActors[Index].Get();
+		ScanWorld = ActiveProcessController->GetWorld();
+	}
+	if (!ScanWorld && GEditor)
+	{
+		ScanWorld = GEditor->GetEditorWorldContext().World();
+	}
+	if (ScanWorld)
+	{
+		GatherTaggedPreviewActors(ScanWorld, ActorsToDestroy);
+	}
+
+	for (int32 Index = ActorsToDestroy.Num() - 1; Index >= 0; --Index)
+	{
+		AActor* Actor = ActorsToDestroy[Index];
 		if (!Actor)
 		{
 			continue;
@@ -137,6 +156,36 @@ void UPushBoxLevelPreviewSubsystem::ClearPreview()
 	SpawnedPreviewActors.Reset();
 	ActiveProcessController = nullptr;
 	ActiveLevelData = nullptr;
+}
+
+void UPushBoxLevelPreviewSubsystem::RegisterPreviewActor(AActor* InActor)
+{
+	if (!InActor)
+	{
+		return;
+	}
+
+	InActor->bIsEditorOnlyActor = true;
+	InActor->SetFlags(RF_Transient);
+	InActor->Tags.AddUnique(PushBoxPreviewActorTag);
+	SpawnedPreviewActors.AddUnique(InActor);
+}
+
+void UPushBoxLevelPreviewSubsystem::GatherTaggedPreviewActors(UWorld* InWorld, TArray<AActor*>& OutActors) const
+{
+	if (!InWorld)
+	{
+		return;
+	}
+
+	for (TActorIterator<AActor> It(InWorld); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (Actor && Actor->Tags.Contains(PushBoxPreviewActorTag))
+		{
+			OutActors.AddUnique(Actor);
+		}
+	}
 }
 
 TSubclassOf<APawn> UPushBoxLevelPreviewSubsystem::ResolvePreviewPawnClass(UWorld* InWorld) const

@@ -26,6 +26,8 @@ public:
 
 private:
 	TSubclassOf<class APawn> ResolvePreviewPawnClass(UWorld* InWorld) const;
+	void RegisterPreviewActor(AActor* InActor);
+	void GatherTaggedPreviewActors(UWorld* InWorld, TArray<AActor*>& OutActors) const;
 
 private:
 	UPROPERTY(Transient)
