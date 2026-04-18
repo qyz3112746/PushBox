@@ -16,6 +16,7 @@ enum class EPushBoxFlowStartMode : uint8
 	DebugNodeLevel UMETA(DisplayName = "Debug Node Level"),
 };
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FPushBoxDirectorPendingTransitionSignature, bool, bLevelPassed, int32, CurrentIndex, FName, CurrentLevelId);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FPushBoxDirectorFlowCompletedSignature);
 
 UCLASS(Blueprintable)
@@ -40,6 +41,9 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "PushBox|Flow", meta = (ClampMin = "0"))
 	int32 DebugLevelIndexInNode;
+
+	UPROPERTY(BlueprintAssignable, Category = "PushBox|Flow")
+	FPushBoxDirectorPendingTransitionSignature OnPendingTransitionStarted;
 
 	UPROPERTY(BlueprintAssignable, Category = "PushBox|Flow")
 	FPushBoxDirectorFlowCompletedSignature OnFlowCompleted;
@@ -81,6 +85,8 @@ private:
 	bool ActivateNodeLevel(int32 NodeIndex, int32 LevelIndexInNode);
 	ALevelProcessController* ResolveNodeController(const struct FPushBoxFlowNode& Node, int32 NodeIndex) const;
 	void BindActiveController(ALevelProcessController* Controller);
+	UFUNCTION()
+	void HandleActiveControllerPendingTransitionStarted(bool bLevelPassed, int32 CurrentIndex, FName CurrentLevelId);
 	UFUNCTION()
 	void HandleActiveControllerFlowCompleted();
 };

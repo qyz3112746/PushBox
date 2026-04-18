@@ -157,15 +157,23 @@ void APushBoxFlowDirector::BindActiveController(ALevelProcessController* Control
 {
 	if (ActiveProcessController)
 	{
+		ActiveProcessController->OnPendingTransitionStarted.RemoveDynamic(this, &APushBoxFlowDirector::HandleActiveControllerPendingTransitionStarted);
 		ActiveProcessController->OnFlowCompleted.RemoveDynamic(this, &APushBoxFlowDirector::HandleActiveControllerFlowCompleted);
 	}
 
 	ActiveProcessController = Controller;
 	if (ActiveProcessController)
 	{
+		ActiveProcessController->OnPendingTransitionStarted.RemoveDynamic(this, &APushBoxFlowDirector::HandleActiveControllerPendingTransitionStarted);
+		ActiveProcessController->OnPendingTransitionStarted.AddDynamic(this, &APushBoxFlowDirector::HandleActiveControllerPendingTransitionStarted);
 		ActiveProcessController->OnFlowCompleted.RemoveDynamic(this, &APushBoxFlowDirector::HandleActiveControllerFlowCompleted);
 		ActiveProcessController->OnFlowCompleted.AddDynamic(this, &APushBoxFlowDirector::HandleActiveControllerFlowCompleted);
 	}
+}
+
+void APushBoxFlowDirector::HandleActiveControllerPendingTransitionStarted(bool bLevelPassed, int32 CurrentIndex, FName CurrentLevelId)
+{
+	OnPendingTransitionStarted.Broadcast(bLevelPassed, CurrentIndex, CurrentLevelId);
 }
 
 void APushBoxFlowDirector::HandleActiveControllerFlowCompleted()

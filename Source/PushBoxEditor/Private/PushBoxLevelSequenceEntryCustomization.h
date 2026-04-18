@@ -25,7 +25,6 @@ private:
 	class APushBoxFlowDirector* ResolveEditorFlowDirector(ALevelProcessController* ProcessController, int32 NodeIndex) const;
 	int32 ResolveNodeIndexInDirector(class APushBoxFlowDirector* Director, ALevelProcessController* ProcessController) const;
 	int32 ResolveSequenceIndexFallback(ALevelProcessController* ProcessController, class UPushBoxLevelData* LevelData) const;
-	void ConfigureEditorDirectorForTest(class APushBoxFlowDirector* Director, int32 NodeIndex, int32 SequenceIndex) const;
 	void StartOrSwitchToTestPlay(class APushBoxFlowDirector* EditorDirector, int32 NodeIndex, int32 SequenceIndex) const;
 
 private:

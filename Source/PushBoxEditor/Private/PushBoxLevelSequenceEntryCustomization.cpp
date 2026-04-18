@@ -18,6 +18,73 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/SBoxPanel.h"
 
+namespace
+{
+struct FPendingFlowTestRequest
+{
+	FSoftObjectPath DirectorPath;
+	TSoftObjectPtr<UPushBoxFlowDataAsset> FlowDataAsset;
+	int32 NodeIndex = INDEX_NONE;
+	int32 SequenceIndex = INDEX_NONE;
+};
+
+TOptional<FPendingFlowTestRequest> GPendingFlowTestRequest;
+FDelegateHandle GPostPIEStartedHandle;
+
+void ConsumePendingFlowTestRequest(bool bIsSimulating)
+{
+	if (bIsSimulating || !GPendingFlowTestRequest.IsSet() || !GEditor || !GEditor->PlayWorld)
+	{
+		return;
+	}
+
+	const FPendingFlowTestRequest Request = GPendingFlowTestRequest.GetValue();
+	GPendingFlowTestRequest.Reset();
+
+	APushBoxFlowDirector* MatchedDirector = nullptr;
+	for (TActorIterator<APushBoxFlowDirector> It(GEditor->PlayWorld); It; ++It)
+	{
+		APushBoxFlowDirector* Candidate = *It;
+		if (!Candidate)
+		{
+			continue;
+		}
+
+		const bool bMatchByPath =
+			Request.DirectorPath.IsValid() &&
+			(Candidate->GetPathName().EndsWith(Request.DirectorPath.GetSubPathString()) ||
+			 Candidate->GetPathName() == Request.DirectorPath.ToString());
+		const bool bMatchByAsset =
+			Request.FlowDataAsset.IsValid() &&
+			Candidate->GetFlowDataAsset() == Request.FlowDataAsset.Get();
+		if (bMatchByPath || bMatchByAsset)
+		{
+			MatchedDirector = Candidate;
+			break;
+		}
+
+		if (!MatchedDirector)
+		{
+			MatchedDirector = Candidate;
+		}
+	}
+
+	if (MatchedDirector)
+	{
+		MatchedDirector->StartFlowAtNodeLevel(Request.NodeIndex, Request.SequenceIndex);
+	}
+}
+
+void EnsurePostPIEStartedHandler()
+{
+	if (GPostPIEStartedHandle.IsValid())
+	{
+		return;
+	}
+	GPostPIEStartedHandle = FEditorDelegates::PostPIEStarted.AddStatic(&ConsumePendingFlowTestRequest);
+}
+} // namespace
+
 TSharedRef<IPropertyTypeCustomization> FPushBoxLevelSequenceEntryCustomization::MakeInstance()
 {
 	return MakeShared<FPushBoxLevelSequenceEntryCustomization>();
@@ -136,7 +203,6 @@ FReply FPushBoxLevelSequenceEntryCustomization::HandleTestClicked() const
 		return FReply::Handled();
 	}
 
-	ConfigureEditorDirectorForTest(EditorDirector, NodeIndex, SequenceIndex);
 	StartOrSwitchToTestPlay(EditorDirector, NodeIndex, SequenceIndex);
 
 	return FReply::Handled();
@@ -349,19 +415,6 @@ APushBoxFlowDirector* FPushBoxLevelSequenceEntryCustomization::ResolveEditorFlow
 	return Fallback;
 }
 
-void FPushBoxLevelSequenceEntryCustomization::ConfigureEditorDirectorForTest(APushBoxFlowDirector* Director, int32 NodeIndex, int32 SequenceIndex) const
-{
-	if (!Director)
-	{
-		return;
-	}
-
-	Director->Modify();
-	Director->StartMode = EPushBoxFlowStartMode::DebugNodeLevel;
-	Director->DebugNodeIndex = FMath::Max(0, NodeIndex);
-	Director->DebugLevelIndexInNode = FMath::Max(0, SequenceIndex);
-}
-
 void FPushBoxLevelSequenceEntryCustomization::StartOrSwitchToTestPlay(APushBoxFlowDirector* EditorDirector, int32 NodeIndex, int32 SequenceIndex) const
 {
 	if (!GEditor)
@@ -394,6 +447,13 @@ void FPushBoxLevelSequenceEntryCustomization::StartOrSwitchToTestPlay(APushBoxFl
 
 	if (!GEditor->IsPlaySessionInProgress())
 	{
+		EnsurePostPIEStartedHandler();
+		FPendingFlowTestRequest& PendingRequest = GPendingFlowTestRequest.Emplace();
+		PendingRequest.DirectorPath = EditorDirector ? FSoftObjectPath(EditorDirector) : FSoftObjectPath();
+		PendingRequest.FlowDataAsset = EditorDirector ? EditorDirector->GetFlowDataAsset() : nullptr;
+		PendingRequest.NodeIndex = NodeIndex;
+		PendingRequest.SequenceIndex = SequenceIndex;
+
 		FRequestPlaySessionParams PlayParams;
 		PlayParams.WorldType = EPlaySessionWorldType::PlayInEditor;
 		GEditor->RequestPlaySession(PlayParams);
