@@ -21,7 +21,7 @@
 - `ABoxTargetCell`：目标格基类，负责目标匹配语义。
 - 其他地形格（如默认地板、墙）通过 `AGridCellBase` 派生扩展。
 
-## 3. Runtime 工作流（关键）
+## 3. Runtime 工作流
 
 ### 3.1 关卡加载
 1. 接收目标 `UPushBoxLevelData`。
