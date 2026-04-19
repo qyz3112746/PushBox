@@ -47,7 +47,6 @@ bool ULevelDataGridEditorWidget::LoadFromLevelDataWithCellDisplay(UPushBoxLevelD
 	SelectedIndices.Reset();
 	SelectionBaseIndices.Reset();
 	bIsSelecting = false;
-	bPastePreviewActive = false;
 	ClearHistoryStacks();
 	return ReloadMapDataWithoutRebuild(InData, InOutCells);
 }
@@ -1132,7 +1131,6 @@ bool ULevelDataGridEditorWidget::ReloadMapDataWithoutRebuild(UPushBoxLevelData* 
 		ResolvedCells.Reset();
 		SelectedIndices.Reset();
 		SelectionBaseIndices.Reset();
-		bPastePreviewActive = false;
 		ApplyValidRectVisibilityAndHitTest();
 		UpdateContentBaseSize();
 		ClampPanOffset();
