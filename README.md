@@ -17,17 +17,12 @@
 1. 克隆项目
 ```bash
 git clone https://github.com/qyz3112746/PushBox.git
-cd PushBox
 ```
 2. 生成工程文件
 - 右键 `PushBox.uproject` -> `Generate Visual Studio project files`
-3. 编译
-```bash
-"D:\UE_5.5\Engine\Build\BatchFiles\Build.bat" PushBoxEditor Win64 Development -Project="D:\Path\To\PushBox\PushBox.uproject" -WaitMutex -FromMsBuild -architecture=x64
-```
-4. 打开项目
+3. 打开项目
 - 双击 `PushBox.uproject`，或从 VS 启动 `PushBoxEditor`
-5. 在编辑器中打开测试地图并进入 PIE 运行
+4. 在编辑器中打开测试地图并进入 PIE 运行
 
 ## 功能总览
 
