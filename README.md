@@ -44,9 +44,9 @@ cd PushBox
 
 ## 文档导航
 
-- 程序文档：[docs/programming.md](docs/programming.md)
-- 策划文档：[策划使用手册](docs/design.md#planner-manual)
-- 美术文档：[docs/art.md](docs/art.md)
+- 程序结构简单说明：[程序结构简单说明](docs/programming.md)
+- 策划使用文档：[策划使用手册](docs/design.md#planner-manual)
+- 美术使用文档：[美术文档](docs/art.md)
 
 ## 已知问题与说明
 
