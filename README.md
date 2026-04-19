@@ -46,7 +46,6 @@ git clone https://github.com/qyz3112746/PushBox.git
 ## 已知问题与说明
 
 - 不要让编辑器中流程中两个引用指向同一个ProcessActor，如果这样做Test按钮启动关卡时始终只能启动第一个。
-- 项目仍有部分架构耦合点。
 
 ## 提交说明
 
