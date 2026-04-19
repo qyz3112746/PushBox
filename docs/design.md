@@ -1,4 +1,5 @@
 ﻿# PushBox 策划使用文档
+<a id='planner-manual'></a>
 
 > 本文档以“怎么配、怎么用、怎么测”为主。
 
@@ -31,7 +32,7 @@
 可以直接在UE中创建地图资产，也可以直接通过编辑器中的NewFile+Save进行创建
 ![LevelData](LevelData.png)
 2. 编辑器具体使用方法
-见[地图编辑器操作手册](/design.md/#3-地图编辑器操作手册)
+见[地图编辑器操作手册](#map-editor-manual)
 
 #### 2.2.3 游戏关卡流程编辑
 1. 选中场地中放置的BP_PushBoxFlowDirector
@@ -49,6 +50,7 @@
 **如果编辑器中编辑Flow列表有多个指向同一个具体场景中ProcessController的Node时，Test只会进入处于上方的流程**
 
 
+<a id='map-editor-manual'></a>
 ## 3. 地图编辑器操作手册
 
 ### 3.1 选择与刷格
@@ -97,3 +99,4 @@
 - 关键关卡可通过 Test 直接启动。
 - 全流程至少跑通一次（首关 -> 末关）。
 - 地图编辑器保存后重开工程数据不丢失。
+
