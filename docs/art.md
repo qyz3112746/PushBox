@@ -18,7 +18,7 @@
 ![CellList](CellList.png)
 5. 通常的Cell中只有一个Niagara和一个StaticMesh，但是下列资源会有额外的资源需要配置
 #### BoxCell
-- 但是要注意的是BoxCell中会有，绑定的BoxActor，也有美术资源需要配置
+- BoxCell中会有绑定的BoxActor，里面也有美术资源需要配置
 ![BoxCell](BoxCell.png)
 #### TargetCell
 - TargetCell中不仅有默认的Niagara，还有一个完成后会显示的Niagara需要配置
